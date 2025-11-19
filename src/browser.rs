@@ -24,7 +24,7 @@ pub fn launch_browser() -> Result<Browser> {
     ];
 
     let options = LaunchOptions {
-        headless: true, 
+        headless: false, 
         sandbox: false,
         path: Some(termux_path),
         window_size: Some((1280, 720)),
