@@ -1,0 +1,59 @@
+# ----------------------------------------------------------------------
+# Rust & Cargo Build Artifacts (Essential)
+# ----------------------------------------------------------------------
+/target/
+**/*.rs.bk
+Cargo.lock
+# Note: Keep Cargo.lock if you want reproducible builds, remove line above if so.
+# For a personal tool, ignoring it is fine to avoid cross-platform lock issues.
+
+# ----------------------------------------------------------------------
+# Application Data & Personal Information (CRITICAL)
+# ----------------------------------------------------------------------
+# Ignore the downloads folder containing scraped media
+downloads/
+/downloads/*
+
+# Ignore session/cookie files if you implement session saving later
+session.json
+cookies.json
+auth.json
+
+# ----------------------------------------------------------------------
+# Logs & Debugging (Don't push crash reports)
+# ----------------------------------------------------------------------
+# Ignore all log files
+*.log
+
+# Ignore the debug screenshots created by the bot
+debug_error.png
+login_proof.png
+login_failed.png
+story_error.png
+*.png
+*.jpg
+*.mp4
+
+# ----------------------------------------------------------------------
+# IDE & Editor Settings (Keep repo clean)
+# ----------------------------------------------------------------------
+# VS Code
+.vscode/
+*.code-workspace
+
+# IntelliJ / JetBrains
+.idea/
+*.iml
+
+# Mac OS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+
+# ----------------------------------------------------------------------
+# Environment Variables (If you switch to .env later)
+# ----------------------------------------------------------------------
+.env
+.env.local

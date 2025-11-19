@@ -1,0 +1,24 @@
+[package]
+name = "insta_sentinel"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+# Browser Automation (Core)
+headless_chrome = "1.0" 
+
+# Async Runtime
+tokio = { version = "1", features = ["full"] }
+
+# Error Handling
+anyhow = "1.0"
+
+# HTTP Client (For downloading images/videos)
+reqwest = { version = "0.11", features = ["stream"] }
+
+# Utilities
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rand = "0.8"
+colored = "2.0"
+futures-util = "0.3"
