@@ -1,12 +1,12 @@
 [package]
 name = "insta_sentinel"
-version = "1.0.0"
+version = "1.4.2"
 edition = "2021"
 
 [dependencies]
 # Browser Automation (Core)
 headless_chrome = "1.0" 
-
+base64 = "0.21"
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
 
