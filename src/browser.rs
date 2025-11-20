@@ -29,7 +29,7 @@ pub fn launch_browser() -> Result<Browser> {
     
     // 1. THE ZOMBIE KILLER (Unique Profile)
     let random_id: u32 = rand::random();
-    let temp_dir = std::env::temp_dir().join(format!("chrome_sentinel_{}", random_id));
+    let temp_dir = std::env::temp_dir().join(format!("chrome_stov_{}", random_id));
     let user_data_arg = format!("--user-data-dir={}", temp_dir.to_string_lossy());
 
     // 2. THE DISPLAY DETECTOR

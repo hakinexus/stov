@@ -4,32 +4,45 @@ mod instagram;
 mod utils;
 
 use std::io::{self, Write};
-use utils::{setup_env, log_info, log_error};
+use utils::{setup_env, log_info, log_error, clear_terminal};
 use instagram::InstagramBot;
 use browser::launch_browser;
+use colored::*; 
 
 #[tokio::main]
 async fn main() {
+    // 1. BUILD PHASE CHECK
+    // The tool has finished compiling. We pause here so you can read any 
+    // cargo warnings or errors above before we wipe them.
+    println!("Build Complete. Press {} to launch STOV...", "ENTER".yellow().bold());
+    let _ = io::stdin().read_line(&mut String::new());
+
+    // 2. NUCLEAR CLEAN START
+    clear_terminal();
+
     setup_env();
 
-    println!("======================================");
-    println!("   INSTA SENTINEL - TERMUX EDITION    ");
-    println!("======================================");
+    // 3. DISPLAY BANNER
+    println!("{}", "======================================".cyan().bold());
+    println!("{}", "       STOV - TERMUX EDITION          ".cyan().bold());
+    println!("{}", "   State of the Art Observation Tool  ".white().italic());
+    println!("{}", "======================================".cyan().bold());
+    println!("");
 
-    // 1. Get Inputs
+    // 4. Get Inputs
     let mut username = String::new();
     let mut password = String::new();
     let mut targets_input = String::new();
 
-    print!("Your Username: ");
+    print!("{} ", "Your Username:".yellow());
     io::stdout().flush().unwrap();
     io::stdin().read_line(&mut username).unwrap();
 
-    print!("Your Password: ");
+    print!("{} ", "Your Password:".yellow());
     io::stdout().flush().unwrap();
     io::stdin().read_line(&mut password).unwrap();
 
-    print!("Targets (e.g. user1,user2): ");
+    print!("{} ", "Targets (e.g. user1,user2):".yellow());
     io::stdout().flush().unwrap();
     io::stdin().read_line(&mut targets_input).unwrap();
 
@@ -39,18 +52,16 @@ async fn main() {
         .filter(|s| !s.is_empty())
         .collect();
 
-    // 2. Launch System
+    println!(""); 
+    
     match launch_browser() {
         Ok(browser) => {
             match InstagramBot::new(&browser) {
                 Ok(bot) => {
-                    // Login
                     if let Err(e) = bot.login(username.trim(), password.trim()) {
                         log_error(&format!("Login Critical Error: {}", e));
                         return;
                     }
-
-                    // Run Scraper
                     if let Err(e) = bot.process_targets(targets).await {
                         log_error(&format!("Scraping Error: {}", e));
                     }
