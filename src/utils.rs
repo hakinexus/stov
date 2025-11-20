@@ -1,21 +1,17 @@
 use colored::*;
 use std::fs;
 use std::path::Path;
-use std::io::Write;
+use std::io::Write; // Critical for flush() in clear_terminal
 use anyhow::{Result, anyhow};
 use rand::Rng;
 use base64::{Engine as _, engine::general_purpose}; 
-// Cleaned imports (Removed USER_AGENT as BROWSER_UA)
 use crate::config::{DOWNLOAD_DIR, IMAGES_DIR, PROOF_DIR, ERROR_DIR};
 
 pub fn setup_env() {
     let paths = vec![DOWNLOAD_DIR, IMAGES_DIR, PROOF_DIR, ERROR_DIR];
     for p in paths {
         let path = Path::new(p);
-        if !path.exists() { 
-            // We ignore errors here (like if folder exists) to keep startup clean
-            let _ = fs::create_dir_all(path); 
-        }
+        if !path.exists() { let _ = fs::create_dir_all(path); }
     }
 }
 
@@ -27,13 +23,13 @@ pub fn log_error(msg: &str) {
     eprintln!("{} {}", "[ERROR]".red().bold(), msg);
 }
 
-// --- UI CLEANER ---
+// --- UI CLEANER (Restored) ---
 pub fn clear_terminal() {
     // \x1b[2J  = Clear entire screen
     // \x1b[3J  = Clear scrollback buffer (History)
     // \x1b[H   = Move cursor to top-left
     print!("\x1b[2J\x1b[3J\x1b[H");
-    std::io::stdout().flush().unwrap();
+    let _ = std::io::stdout().flush();
 }
 
 pub fn save_screenshot(data: Vec<u8>, folder: &str, base_name: &str) -> Result<()> {
@@ -58,7 +54,7 @@ pub fn save_html(text: String, folder: &str, base_name: &str) {
 pub fn save_base64_file(base64_string: &str, filename: &str) -> Result<()> {
     let path = format!("{}/{}", DOWNLOAD_DIR, filename);
     
-    // 1. Strip the "data:video/mp4;base64," prefix if present
+    // 1. Strip prefix
     let clean_string = if let Some(index) = base64_string.find(',') {
         &base64_string[index + 1..]
     } else {
@@ -68,9 +64,9 @@ pub fn save_base64_file(base64_string: &str, filename: &str) -> Result<()> {
     // 2. Decode
     let bytes = general_purpose::STANDARD.decode(clean_string)?;
 
-    // 3. Validation (Must be > 50KB to be a valid media file)
-    if bytes.len() < 50_000 {
-        return Err(anyhow!("Decoded file too small ({} bytes)", bytes.len()));
+    // 3. VALIDATION (The 30KB fix)
+    if bytes.len() < 30_000 {
+        return Err(anyhow!("Decoded file too small ({} bytes). Rejected.", bytes.len()));
     }
 
     let mut file = fs::File::create(&path)?;

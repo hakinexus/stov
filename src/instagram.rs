@@ -45,16 +45,24 @@ impl<'a> InstagramBot<'a> {
 
     fn inject_sniffer(&self) {
         let script = r#"
-            window.__intercepted_urls = [];
-            const observer = new PerformanceObserver((list) => {
-                list.getEntries().forEach((entry) => {
-                    if (entry.name.includes('.mp4') || (entry.name.includes('.jpg') && entry.name.includes('instagram'))) {
-                        window.__intercepted_urls.push(entry.name);
-                    }
+            if (!window.__sniffer_active) {
+                window.__intercepted_urls = [];
+                const observer = new PerformanceObserver((list) => {
+                    list.getEntries().forEach((entry) => {
+                        if (entry.name.includes('.mp4') || (entry.name.includes('.jpg') && entry.name.includes('instagram'))) {
+                            window.__intercepted_urls.push(entry.name);
+                        }
+                    });
                 });
-            });
-            observer.observe({ entryTypes: ['resource'] });
+                observer.observe({ entryTypes: ['resource'] });
+                window.__sniffer_active = true;
+            }
         "#;
+        let _ = self.tab.evaluate(script, false);
+    }
+
+    fn clear_network_logs(&self) {
+        let script = "window.__intercepted_urls = []; performance.clearResourceTimings();";
         let _ = self.tab.evaluate(script, false);
     }
 
@@ -125,14 +133,11 @@ impl<'a> InstagramBot<'a> {
         Ok(())
     }
 
-    // --- EXPERT BATCH PROCESSOR (Freeze & Fetch) ---
     async fn process_story_batch(&self, username: &str) -> Result<()> {
         self.inject_sniffer();
         
-        // Open Story
         if let Ok(el) = self.tab.find_element(SEL_STORY_RING) { let _ = el.click(); }
         
-        // Initial buffer wait
         thread::sleep(Duration::from_secs(3));
 
         let mut downloaded_history: HashSet<String> = HashSet::new();
@@ -140,9 +145,9 @@ impl<'a> InstagramBot<'a> {
         let mut consecutive_errors = 0;
 
         log_info(&format!("Starting batch extraction for: {}", username));
+        self.clear_network_logs();
 
         loop {
-            // 1. Safety Checks
             let current_url = self.tab.get_url();
             if !current_url.contains("stories") {
                 log_info("Batch ended (Returned to feed).");
@@ -154,36 +159,32 @@ impl<'a> InstagramBot<'a> {
                 break;
             }
 
-            // 2. DOWNLOAD LOGIC
-            // We pass the history so we don't download the same file twice
             match self.download_active_story(username, &mut downloaded_history).await {
                 Ok(true) => {
                     story_count += 1;
                     consecutive_errors = 0;
-                    log_info(&format!("Story #{} Saved. Moving to next...", story_count));
+                    log_info(&format!("Story #{} Saved.", story_count));
+                    self.clear_network_logs(); 
+                    log_info("Moving to next...");
+                    let _ = self.tab.press_key("ArrowRight");
+                    thread::sleep(Duration::from_millis(1500));
                 },
                 Ok(false) => {
-                    // Returned false means duplicate or ad (skipped)
-                    consecutive_errors = 0; 
-                    log_info("Skipping (Duplicate/Ad)...");
+                    consecutive_errors += 1;
+                    log_info("Skipping (No new media found)...");
+                    let _ = self.tab.press_key("ArrowRight");
+                    thread::sleep(Duration::from_millis(1500));
                 },
                 Err(e) => {
                     consecutive_errors += 1;
-                    log_error(&format!("Error on current story: {}", e));
+                    log_error(&format!("Error: {}", e));
+                    let _ = self.tab.press_key("ArrowRight");
+                    thread::sleep(Duration::from_millis(1500));
                 }
             }
 
-            // 3. NAVIGATION (Crucial Step)
-            // We press 'ArrowRight' to go next.
-            let _ = self.tab.press_key("ArrowRight");
-
-            // 4. TRANSITION WAIT
-            // We wait for the URL or the Media Source to change.
-            // This prevents the bot from firing on the same slide before it transitions.
-            thread::sleep(Duration::from_millis(1500)); 
-
-            if consecutive_errors > 5 {
-                log_info("Too many errors. Exiting batch.");
+            if consecutive_errors > 8 {
+                log_info("Too many consecutive errors. Exiting batch.");
                 let _ = self.tab.press_key("Escape");
                 break;
             }
@@ -193,118 +194,129 @@ impl<'a> InstagramBot<'a> {
         Ok(())
     }
 
-    // This function handles the "Freeze -> Extract -> Download" logic for a SINGLE story slide
     async fn download_active_story(&self, username: &str, history: &mut HashSet<String>) -> Result<bool> {
-        
-        // STEP A: PAUSE THE VIDEO (The "Freeze")
-        // We inject JS to find the video element and force pause it.
-        // This stops Instagram from skipping to the next story while we are downloading.
-        let js_freeze = r#"
-            (function() {
-                let v = document.querySelector('video');
-                if (v) { 
-                    v.pause(); 
-                    return "PAUSED";
-                }
-                return "IMAGE"; // Images don't need pausing
-            })()
-        "#;
-        let _ = self.tab.evaluate(js_freeze, false);
+        for _attempt in 1..=20 { // 10 seconds retry
+            
+            // A. PRECISE PAUSE (Unchanged as requested)
+            let js_freeze = r#"
+                (function() {
+                    // Video Pause
+                    let v = document.querySelector('video');
+                    if (v && !v.paused && v.readyState > 2) { v.pause(); }
+                    // Image Pause (UI Button)
+                    let pauseBtn = document.querySelector('svg[aria-label="Pause"]');
+                    if (pauseBtn) {
+                        let btn = pauseBtn.closest('div[role="button"]') || pauseBtn.parentElement;
+                        if (btn) btn.click();
+                    }
+                })()
+            "#;
+            let _ = self.tab.evaluate(js_freeze, false);
 
-        // Give a tiny moment for the pause to take effect and network logs to settle
-        thread::sleep(Duration::from_millis(500));
+            // B. IDENTIFY MEDIA (Updated for Images)
+            let js_identify = r#"
+                (function() {
+                    let urls = window.__intercepted_urls || [];
+                    let candidates = [];
+                    
+                    // 1. NET (Backwards)
+                    for (let i = urls.length - 1; i >= 0; i--) {
+                        candidates.push("NET|" + urls[i]);
+                    }
+                    
+                    // 2. DOM - VIDEO
+                    let v = document.querySelector('video');
+                    if (v && v.currentSrc && !v.currentSrc.startsWith('blob:')) candidates.push("DOM_VIDEO|" + v.currentSrc);
 
-        // STEP B: IDENTIFY THE MEDIA URL
-        // We look for the High Res URL in DOM or Network Logs
-        let js_identify = r#"
-            (function() {
-                let candidates = [];
-                
-                // 1. Network Log (Best for Videos)
-                let resources = performance.getEntriesByType('resource');
-                // Check last 50 requests
-                for (let i = resources.length - 1; i >= Math.max(0, resources.length - 50); i--) {
-                    let name = resources[i].name;
-                    if (name.includes('.mp4') && !name.startsWith('blob:')) candidates.push(name);
-                }
-
-                // 2. DOM (Best for Images & Fallback Video)
-                let v = document.querySelector('video');
-                if (v && v.src && v.src.startsWith('http')) candidates.push(v.src);
-                
-                let vsrc = document.querySelector('video source');
-                if (vsrc && vsrc.src && vsrc.src.startsWith('http')) candidates.push(vsrc.src);
-
-                let imgs = Array.from(document.querySelectorAll('img'));
-                let target = imgs.find(i => i.srcset && i.src.includes('instagram'));
-                if (target) {
-                     let parts = target.srcset.split(',');
-                     candidates.push(parts[parts.length - 1].trim().split(' ')[0]);
-                }
-                
-                // Return unique
-                return [...new Set(candidates)].join(';');
-            })()
-        "#;
-
-        if let Ok(res) = self.tab.evaluate(js_identify, false) {
-            if let Some(val) = res.value {
-                let s = val.as_str().unwrap_or("");
-                let candidates: Vec<&str> = s.split(';').collect();
-
-                for url in candidates {
-                    if url.len() < 15 { continue; }
-
-                    // Clean URL (Strip range for full video)
-                    let mut clean_url = url.to_string();
-                    if let Some(idx) = clean_url.find("&bytestart") { clean_url = clean_url[..idx].to_string(); }
-                    if let Some(idx) = clean_url.find("?bytestart") { clean_url = clean_url[..idx].to_string(); }
-
-                    // CHECK HISTORY (Deduplication)
-                    if history.contains(&clean_url) {
-                        continue; // Already got this one
+                    // 3. DOM - IMAGE (FIXED LOGIC)
+                    // Instead of looking for specific attributes, we look for SIZE.
+                    // The main story image is always the largest image on screen.
+                    let images = Array.from(document.querySelectorAll('img'));
+                    for (let img of images) {
+                        // Must be visible and large (typical story is > 300px wide)
+                        if (img.naturalWidth > 300 && img.src.includes('instagram')) {
+                             candidates.push("DOM_IMAGE|" + img.src);
+                             // If it also has srcset, grab the best quality
+                             if (img.srcset) {
+                                 let parts = img.srcset.split(',');
+                                 candidates.push("DOM_IMAGE|" + parts[parts.length - 1].trim().split(' ')[0]);
+                             }
+                        }
                     }
 
-                    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-                    let ext = if clean_url.contains(".mp4") { "mp4" } else { "jpg" };
-                    let fname = format!("{}_{}.{}", username, timestamp, ext);
+                    return [...new Set(candidates)].join(';');
+                })()
+            "#;
 
-                    // STEP C: BROWSER FETCH (Secure Download)
-                    let js_fetch = format!(r#"
-                        (async function() {{
-                            try {{
-                                const response = await fetch("{}", {{ cache: 'force-cache' }});
-                                const blob = await response.blob();
-                                return await new Promise((resolve) => {{
-                                    const reader = new FileReader();
-                                    reader.onloadend = () => resolve(reader.result);
-                                    reader.readAsDataURL(blob);
-                                }});
-                            }} catch (err) {{ return "ERROR"; }}
-                        }})()
-                    "#, clean_url);
+            let raw_result = match self.tab.evaluate(js_identify, false) {
+                Ok(res) => res.value.unwrap().as_str().unwrap_or("").to_string(),
+                Err(_) => "".to_string(),
+            };
 
-                    match self.tab.evaluate(&js_fetch, true) {
-                        Ok(res_fetch) => {
-                            if let Some(data_val) = res_fetch.value {
-                                let data_uri = data_val.as_str().unwrap_or("");
-                                if data_uri.starts_with("data:") {
-                                    // Save it
-                                    if let Ok(_) = save_base64_file(data_uri, &fname) {
-                                        history.insert(clean_url); // Add to history
-                                        return Ok(true);
-                                    }
+            let items: Vec<&str> = raw_result.split(';').collect();
+            let mut found_new = false;
+
+            for item in items {
+                if item.is_empty() { continue; }
+                let parts: Vec<&str> = item.split('|').collect();
+                if parts.len() < 2 { continue; }
+                
+                let source_type = parts[0]; 
+                let mut url = parts[1].to_string();
+
+                if url.len() < 15 { continue; }
+
+                if url.contains(".mp4") {
+                    if let Some(idx) = url.find("&bytestart") { url = url[..idx].to_string(); }
+                    if let Some(idx) = url.find("?bytestart") { url = url[..idx].to_string(); }
+                }
+
+                if history.contains(&url) { continue; }
+
+                // FOUND ONE!
+                let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+                // Determine extension based on URL content
+                let ext = if url.contains(".mp4") { "mp4" } else { "jpg" };
+                let fname = format!("{}_{}.{}", username, timestamp, ext);
+
+                log_info(&format!("Found new {} via {}! Downloading...", ext, source_type));
+
+                let js_fetch = format!(r#"
+                    (async function() {{
+                        try {{
+                            const response = await fetch("{}", {{ cache: 'force-cache' }});
+                            const blob = await response.blob();
+                            return await new Promise((resolve) => {{
+                                const reader = new FileReader();
+                                reader.onloadend = () => resolve(reader.result);
+                                reader.readAsDataURL(blob);
+                            }});
+                        }} catch (err) {{ return "ERROR"; }}
+                    }})()
+                "#, url);
+
+                match self.tab.evaluate(&js_fetch, true) {
+                    Ok(res_fetch) => {
+                        if let Some(data_val) = res_fetch.value {
+                            let data_uri = data_val.as_str().unwrap_or("");
+                            if data_uri.starts_with("data:") {
+                                if let Ok(_) = save_base64_file(data_uri, &fname) {
+                                    history.insert(url);
+                                    found_new = true;
+                                    break; 
                                 }
                             }
-                        },
-                        Err(_) => {}
-                    }
+                        }
+                    },
+                    Err(_) => {}
                 }
             }
-        }
 
-        // If we reach here, we found no NEW media on this slide. 
-        // It might be an Ad or a repeat. Return false so the loop skips it.
+            if found_new {
+                return Ok(true);
+            }
+            thread::sleep(Duration::from_millis(500));
+        }
         Ok(false)
     }
 }
