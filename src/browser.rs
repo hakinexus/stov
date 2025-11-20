@@ -1,40 +1,82 @@
 use headless_chrome::{Browser, LaunchOptions};
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use std::path::PathBuf;
+use std::process::Command;
 use std::ffi::OsStr;
-use crate::config::{CHROME_PATH, USER_AGENT};
+use std::env;
+// We import CHROME_PATH to fix the warning and use central config
+use crate::config::{USER_AGENT, CHROME_PATH};
+
+// Helper to find Chromium automatically
+fn find_chromium_path() -> Result<PathBuf> {
+    // 1. Check the Configured Path first
+    let p1 = PathBuf::from(CHROME_PATH);
+    if p1.exists() { return Ok(p1); }
+
+    // 2. Check standard system path (Fallback)
+    if let Ok(output) = Command::new("which").arg("chromium").output() {
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !s.is_empty() { return Ok(PathBuf::from(s)); }
+        }
+    }
+    Err(anyhow!("Chromium binary not found. Run: pkg install chromium"))
+}
 
 pub fn launch_browser() -> Result<Browser> {
-    let termux_path = PathBuf::from(CHROME_PATH);
-
-    // We format the user agent as a command line flag
+    let termux_path = find_chromium_path()?;
     let ua_arg = format!("--user-agent={}", USER_AGENT);
+    
+    // 1. THE ZOMBIE KILLER (Unique Profile)
+    let random_id: u32 = rand::random();
+    let temp_dir = std::env::temp_dir().join(format!("chrome_sentinel_{}", random_id));
+    let user_data_arg = format!("--user-data-dir={}", temp_dir.to_string_lossy());
 
-    // These arguments are MANDATORY for Termux stability
-    let args_vec = vec![
-        "--no-sandbox",               // Android kernel doesn't support sandbox
+    // 2. THE DISPLAY DETECTOR
+    let has_display = env::var("DISPLAY").is_ok();
+    
+    if has_display {
+        println!(" [DISPLAY DETECTED] Launching in X11 Visual Mode (Streaming)...");
+    } else {
+        println!(" [NO DISPLAY DETECTED] Launching in Headless Mode (Invisible).");
+    }
+
+    let mut args_vec = vec![
+        "--no-sandbox",               
         "--disable-setuid-sandbox",   
-        "--disable-dev-shm-usage",    // Prevents memory crashes
-        "--disable-gpu",              // Saves resources
-        "--no-zygote",                // Simplifies process model
-        "--single-process",           // Reduces RAM usage
+        "--disable-dev-shm-usage",    
+        "--disable-gpu",              
+        "--no-zygote",                
+        "--single-process",           
         "--ignore-certificate-errors",
         "--window-size=1280,720",
-        &ua_arg // Add the User Agent here
+        "--disable-software-rasterizer",
+        "--disable-default-apps",
+        "--disable-extensions",
+        "--disable-sync",
+        "--no-first-run",
+        &user_data_arg,
+        &ua_arg
     ];
 
+    if has_display {
+        args_vec.push("--force-device-scale-factor=1.0");
+    }
+
     let options = LaunchOptions {
-        headless: false, 
+        headless: !has_display, // Smart Toggle
         sandbox: false,
         path: Some(termux_path),
         window_size: Some((1280, 720)),
-        // user_agent field removed (moved to args above)
         enable_gpu: false,
         args: args_vec.iter().map(|s| OsStr::new(s)).collect(),
         ..Default::default()
     };
 
     println!("Initializing Termux Chromium Engine...");
-    let browser = Browser::new(options)?;
-    Ok(browser)
+    
+    match Browser::new(options) {
+        Ok(b) => Ok(b),
+        Err(e) => Err(anyhow!("Browser Launch Failed: {}. \nTip: If using X11, ensure Termux-X11 app is open.", e))
+    }
 }
