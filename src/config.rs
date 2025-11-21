@@ -16,9 +16,9 @@ pub const USER_XPATH_2: &str = "//input[@type='text']";
 pub const PASS_CSS: &str = "input[name='password']";
 pub const PASS_XPATH: &str = "//input[@type='password']";
 
+// Submit Button Selector
 pub const SEL_SUBMIT: &str = "button[type='submit']";
+
 pub const SEL_HOME_ICON: &str = "svg[aria-label='Home']"; 
 pub const SEL_STORY_RING: &str = "canvas"; 
-
-// This was missing in your file:
 pub const SEL_AVATAR: &str = "img[alt*='profile picture']";

@@ -39,7 +39,6 @@ impl<'a> InstagramBot<'a> {
         el.click()?; 
         el.type_into(text)?;
         thread::sleep(Duration::from_millis(500));
-        let _ = self.tab.press_key("Tab"); 
         Ok(())
     }
 
@@ -66,6 +65,35 @@ impl<'a> InstagramBot<'a> {
         let _ = self.tab.evaluate(script, false);
     }
 
+    fn safely_click_login(&self) -> Result<()> {
+        log_info("Activating Login...");
+
+        if let Ok(buttons) = self.tab.find_elements("button") {
+            for btn in buttons {
+                if let Ok(text) = btn.get_inner_text() {
+                    let clean_text = text.to_lowercase();
+                    if clean_text.contains("show") { continue; }
+                    if clean_text.contains("log in") {
+                        let _ = btn.click();
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        if let Ok(btn) = self.tab.find_element(SEL_SUBMIT) {
+             let text = btn.get_inner_text().unwrap_or_default().to_lowercase();
+             if !text.contains("show") {
+                 let _ = btn.click();
+                 return Ok(());
+             }
+        }
+
+        // Fallback
+        let _ = self.tab.press_key("Enter");
+        Ok(())
+    }
+
     pub fn login(&self, user: &str, pass: &str) -> Result<()> {
         log_info("Navigating directly to Login Page...");
         self.tab.navigate_to("https://www.instagram.com/accounts/login/")?;
@@ -76,6 +104,7 @@ impl<'a> InstagramBot<'a> {
             if let Ok(el) = self.tab.find_element_by_xpath(xpath) { let _ = el.click(); thread::sleep(Duration::from_secs(1)); break; }
         }
         
+        // 1. ENTER CREDENTIALS ONCE
         log_info("Inputting Credentials...");
         match self.smart_find(USER_CSS, USER_XPATH_1, Some(USER_XPATH_2)) {
             Ok(u_el) => { if let Err(e) = self.react_type(&u_el, user) { log_error(&format!("User Type Error: {}", e)); } },
@@ -86,33 +115,83 @@ impl<'a> InstagramBot<'a> {
             Ok(p_el) => { if let Err(e) = self.react_type(&p_el, pass) { log_error(&format!("Pass Type Error: {}", e)); } },
             Err(e) => { self.snapshot(ERROR_DIR, "missing_password"); return Err(e); }
         }
-        thread::sleep(Duration::from_millis(500));
-        if let Ok(btn) = self.tab.find_element(SEL_SUBMIT) { let _ = btn.click(); } else { let _ = self.tab.press_key("Enter"); }
+        thread::sleep(Duration::from_secs(2));
 
-        log_info("Verifying authentication...");
-        let start_time = Instant::now();
-        loop {
-            if self.tab.find_element(SEL_HOME_ICON).is_ok() || self.tab.find_element(SEL_AVATAR).is_ok() {
-                log_info("Login Verified.");
-                self.snapshot(PROOF_DIR, "login_success");
-                return Ok(());
+        // 2. SMART LOGIN LOOP (Handles "Problem Logging In" Error)
+        for attempt in 1..=3 {
+            if attempt > 1 {
+                log_info(&format!("Retry attempt {}/3...", attempt));
             }
-            if let Ok(el) = self.tab.find_element_by_xpath("//button[contains(text(), 'Not Now')]") {
-                 let _ = el.click();
-                 return Ok(());
+
+            // Click the button
+            if let Err(e) = self.safely_click_login() {
+                log_error(&format!("Click failed: {}", e));
             }
-            let url = self.tab.get_url();
-            if !url.contains("accounts/login") && !url.contains("challenge") && url.len() > 20 {
-                log_info("Login Assumed (URL changed).");
-                thread::sleep(Duration::from_secs(5));
-                return Ok(());
+
+            log_info("Verifying authentication...");
+            let start_time = Instant::now();
+            let mut retry_needed = false;
+
+            // Wait up to 20 seconds for a result
+            while start_time.elapsed() < Duration::from_secs(20) {
+                
+                // A. SUCCESS CHECKS
+                if self.tab.find_element(SEL_HOME_ICON).is_ok() || self.tab.find_element(SEL_AVATAR).is_ok() {
+                    log_info("Login Verified.");
+                    self.snapshot(PROOF_DIR, "login_success");
+                    return Ok(());
+                }
+                if let Ok(el) = self.tab.find_element_by_xpath("//button[contains(text(), 'Not Now')]") {
+                    let _ = el.click();
+                    return Ok(());
+                }
+                let url = self.tab.get_url();
+                if !url.contains("accounts/login") && !url.contains("challenge") && url.len() > 20 {
+                    log_info("Login Assumed (URL changed).");
+                    thread::sleep(Duration::from_secs(5));
+                    return Ok(());
+                }
+
+                // B. ERROR CHECKS
+                let error_selectors = vec!["#slerror", "p[data-testid='login-error-message']", "p[role='alert']"];
+                for sel in error_selectors {
+                    if let Ok(el) = self.tab.find_element(sel) {
+                        if let Ok(text) = el.get_inner_text() {
+                            let err_msg = text.to_lowercase();
+                            
+                            // FATAL ERROR (Wrong Password)
+                            if err_msg.contains("incorrect") || err_msg.contains("password") {
+                                log_error("Fatal: Incorrect Password.");
+                                return Err(anyhow!("Incorrect Password"));
+                            }
+
+                            // RETRYABLE ERROR (The "Problem" Glitch)
+                            if err_msg.contains("problem") || err_msg.contains("try again") {
+                                log_error("Detected 'Problem logging in' glitch.");
+                                retry_needed = true;
+                                break; // Break inner selector loop
+                            }
+                        }
+                    }
+                }
+
+                if retry_needed { break; } // Break wait loop to trigger retry
+                thread::sleep(Duration::from_millis(500));
             }
-            if start_time.elapsed() > Duration::from_secs(60) {
-                 self.snapshot(PROOF_DIR, "login_timeout");
-                 return Err(anyhow!("Login Timed Out"));
+
+            if retry_needed {
+                log_info("Waiting 3 seconds before retrying click...");
+                thread::sleep(Duration::from_secs(3));
+                continue; // Loop back to 'safely_click_login'
+            } else {
+                // If we timed out without success or error, we likely just need to wait or try clicking again
+                if attempt == 3 {
+                    return Err(anyhow!("Login Timed Out"));
+                }
             }
-            thread::sleep(Duration::from_millis(500));
         }
+
+        Err(anyhow!("Login failed after retries"))
     }
 
     pub async fn process_targets(&self, targets: Vec<String>) -> Result<()> {
@@ -195,15 +274,13 @@ impl<'a> InstagramBot<'a> {
     }
 
     async fn download_active_story(&self, username: &str, history: &mut HashSet<String>) -> Result<bool> {
-        for _attempt in 1..=20 { // 10 seconds retry
+        for _attempt in 1..=20 { 
             
-            // A. PRECISE PAUSE (Unchanged as requested)
+            // A. PAUSE
             let js_freeze = r#"
                 (function() {
-                    // Video Pause
                     let v = document.querySelector('video');
                     if (v && !v.paused && v.readyState > 2) { v.pause(); }
-                    // Image Pause (UI Button)
                     let pauseBtn = document.querySelector('svg[aria-label="Pause"]');
                     if (pauseBtn) {
                         let btn = pauseBtn.closest('div[role="button"]') || pauseBtn.parentElement;
@@ -213,30 +290,23 @@ impl<'a> InstagramBot<'a> {
             "#;
             let _ = self.tab.evaluate(js_freeze, false);
 
-            // B. IDENTIFY MEDIA (Updated for Images)
+            // B. IDENTIFY
             let js_identify = r#"
                 (function() {
                     let urls = window.__intercepted_urls || [];
                     let candidates = [];
                     
-                    // 1. NET (Backwards)
                     for (let i = urls.length - 1; i >= 0; i--) {
                         candidates.push("NET|" + urls[i]);
                     }
                     
-                    // 2. DOM - VIDEO
                     let v = document.querySelector('video');
                     if (v && v.currentSrc && !v.currentSrc.startsWith('blob:')) candidates.push("DOM_VIDEO|" + v.currentSrc);
 
-                    // 3. DOM - IMAGE (FIXED LOGIC)
-                    // Instead of looking for specific attributes, we look for SIZE.
-                    // The main story image is always the largest image on screen.
                     let images = Array.from(document.querySelectorAll('img'));
                     for (let img of images) {
-                        // Must be visible and large (typical story is > 300px wide)
                         if (img.naturalWidth > 300 && img.src.includes('instagram')) {
                              candidates.push("DOM_IMAGE|" + img.src);
-                             // If it also has srcset, grab the best quality
                              if (img.srcset) {
                                  let parts = img.srcset.split(',');
                                  candidates.push("DOM_IMAGE|" + parts[parts.length - 1].trim().split(' ')[0]);
@@ -273,9 +343,7 @@ impl<'a> InstagramBot<'a> {
 
                 if history.contains(&url) { continue; }
 
-                // FOUND ONE!
                 let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-                // Determine extension based on URL content
                 let ext = if url.contains(".mp4") { "mp4" } else { "jpg" };
                 let fname = format!("{}_{}.{}", username, timestamp, ext);
 
