@@ -7,6 +7,7 @@ pub const DOWNLOAD_DIR: &str = "./downloads";
 pub const IMAGES_DIR: &str = "./images";
 pub const PROOF_DIR: &str = "./images/login_proofs";
 pub const ERROR_DIR: &str = "./images/story_errors";
+pub const PROFILES_DIR: &str = "./profiles"; // <--- NEW
 
 // --- Selectors ---
 pub const USER_CSS: &str = "input[name='username']";
@@ -16,9 +17,7 @@ pub const USER_XPATH_2: &str = "//input[@type='text']";
 pub const PASS_CSS: &str = "input[name='password']";
 pub const PASS_XPATH: &str = "//input[@type='password']";
 
-// Submit Button Selector
 pub const SEL_SUBMIT: &str = "button[type='submit']";
-
 pub const SEL_HOME_ICON: &str = "svg[aria-label='Home']"; 
 pub const SEL_STORY_RING: &str = "canvas"; 
 pub const SEL_AVATAR: &str = "img[alt*='profile picture']";
