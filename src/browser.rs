@@ -4,16 +4,12 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::ffi::OsStr;
 use std::env;
-// We import CHROME_PATH to fix the warning and use central config
 use crate::config::{USER_AGENT, CHROME_PATH};
 
-// Helper to find Chromium automatically
 fn find_chromium_path() -> Result<PathBuf> {
-    // 1. Check the Configured Path first
     let p1 = PathBuf::from(CHROME_PATH);
     if p1.exists() { return Ok(p1); }
 
-    // 2. Check standard system path (Fallback)
     if let Ok(output) = Command::new("which").arg("chromium").output() {
         if output.status.success() {
             let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -27,12 +23,12 @@ pub fn launch_browser() -> Result<Browser> {
     let termux_path = find_chromium_path()?;
     let ua_arg = format!("--user-agent={}", USER_AGENT);
     
-    // 1. THE ZOMBIE KILLER (Unique Profile)
+    // Zombie Killer: Unique profile per run
     let random_id: u32 = rand::random();
     let temp_dir = std::env::temp_dir().join(format!("chrome_stov_{}", random_id));
     let user_data_arg = format!("--user-data-dir={}", temp_dir.to_string_lossy());
 
-    // 2. THE DISPLAY DETECTOR
+    // Smart Display Detection
     let has_display = env::var("DISPLAY").is_ok();
     
     if has_display {
@@ -64,7 +60,7 @@ pub fn launch_browser() -> Result<Browser> {
     }
 
     let options = LaunchOptions {
-        headless: !has_display, // Smart Toggle
+        headless: !has_display, 
         sandbox: false,
         path: Some(termux_path),
         window_size: Some((1280, 720)),

@@ -7,7 +7,7 @@ pub const DOWNLOAD_DIR: &str = "./downloads";
 pub const IMAGES_DIR: &str = "./images";
 pub const PROOF_DIR: &str = "./images/login_proofs";
 pub const ERROR_DIR: &str = "./images/story_errors";
-pub const PROFILES_DIR: &str = "./profiles"; // <--- NEW
+pub const PROFILES_DIR: &str = "./profiles";
 
 // --- Selectors ---
 pub const USER_CSS: &str = "input[name='username']";

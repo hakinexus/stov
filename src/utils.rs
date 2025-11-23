@@ -5,10 +5,9 @@ use std::io::Write;
 use anyhow::{Result, anyhow};
 use rand::Rng;
 use base64::{Engine as _, engine::general_purpose}; 
-use serde::{Serialize, Deserialize}; // Needed for JSON
+use serde::{Serialize, Deserialize};
 use crate::config::{DOWNLOAD_DIR, IMAGES_DIR, PROOF_DIR, ERROR_DIR, PROFILES_DIR};
 
-// --- PROFILE STRUCTURE ---
 #[derive(Serialize, Deserialize)]
 pub struct UserProfile {
     pub username: String,
@@ -38,18 +37,15 @@ pub fn clear_terminal() {
 }
 
 // --- PROFILE MANAGEMENT ---
-
 pub fn save_profile(username: &str, session_id: &str) -> Result<()> {
     let profile = UserProfile {
         username: username.to_string(),
         session_id: session_id.to_string(),
     };
-    
     let json = serde_json::to_string_pretty(&profile)?;
     let filename = format!("{}/{}.json", PROFILES_DIR, username);
     let mut file = fs::File::create(filename)?;
     file.write_all(json.as_bytes())?;
-    
     log_info(&format!("Session saved for user: {}", username));
     Ok(())
 }
@@ -57,7 +53,6 @@ pub fn save_profile(username: &str, session_id: &str) -> Result<()> {
 pub fn list_profiles() -> Result<Vec<String>> {
     let mut profiles = Vec::new();
     let paths = fs::read_dir(PROFILES_DIR)?;
-
     for path in paths {
         let p = path?.path();
         if let Some(ext) = p.extension() {
@@ -79,7 +74,6 @@ pub fn load_profile_session(username: &str) -> Result<String> {
 }
 
 // --- MEDIA SAVING ---
-
 pub fn save_screenshot(data: Vec<u8>, folder: &str, base_name: &str) -> Result<()> {
     if !Path::new(folder).exists() { fs::create_dir_all(folder)?; }
     let mut rng = rand::thread_rng();
@@ -100,20 +94,23 @@ pub fn save_html(text: String, folder: &str, base_name: &str) {
 
 pub fn save_base64_file(base64_string: &str, filename: &str) -> Result<()> {
     let path = format!("{}/{}", DOWNLOAD_DIR, filename);
+    
     let clean_string = if let Some(index) = base64_string.find(',') {
         &base64_string[index + 1..]
     } else {
         base64_string
     };
+
     let bytes = general_purpose::STANDARD.decode(clean_string)?;
-    
-    // Validation: > 30KB
+
+    // Validation: > 30KB (Smallest valid story image/video chunk)
     if bytes.len() < 30_000 {
         return Err(anyhow!("Decoded file too small ({} bytes). Rejected.", bytes.len()));
     }
 
     let mut file = fs::File::create(&path)?;
     file.write_all(&bytes)?;
+    
     log_info(&format!("Media Saved via Browser Fetch (Size: {} KB): {}", bytes.len() / 1024, filename));
     Ok(())
 }

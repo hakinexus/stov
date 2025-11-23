@@ -23,13 +23,11 @@ async fn main() {
     println!("{}", "======================================".cyan().bold());
     println!("");
 
-    // --- CREDENTIAL LOGIC ---
     let mut username = String::new();
     let mut password = String::new();
     let mut use_saved_session = false;
     let mut saved_session_id = String::new();
 
-    // 1. Check for Saved Profiles
     let profiles = list_profiles().unwrap_or_default();
     
     if !profiles.is_empty() {
@@ -68,7 +66,6 @@ async fn main() {
         }
     }
 
-    // 2. Manual Inputs (if not using session)
     if !use_saved_session {
         print!("{} ", "Your Username:".yellow());
         io::stdout().flush().unwrap();
@@ -79,7 +76,6 @@ async fn main() {
         io::stdin().read_line(&mut password).unwrap();
     }
 
-    // 3. Target Inputs (Always needed)
     let mut targets_input = String::new();
     print!("{} ", "Targets (e.g. user1,user2):".yellow());
     io::stdout().flush().unwrap();
@@ -93,7 +89,6 @@ async fn main() {
 
     println!(""); 
     
-    // 4. Launch
     match launch_browser() {
         Ok(browser) => {
             match InstagramBot::new(&browser) {

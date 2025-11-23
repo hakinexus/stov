@@ -90,13 +90,10 @@ impl<'a> InstagramBot<'a> {
         Ok(())
     }
 
-    // --- LOGIN VIA COOKIE ---
     pub fn login_with_session(&self, session_id: &str) -> Result<()> {
         log_info("Attempting Login via Saved Session...");
-        
         self.tab.navigate_to("https://www.instagram.com")?;
         
-        // FIXED: Added 'same_party: None' to satisfy the struct definition
         let cookie = CookieParam {
             name: "sessionid".to_string(),
             value: session_id.to_string(),
@@ -111,12 +108,11 @@ impl<'a> InstagramBot<'a> {
             source_scheme: None,
             source_port: None,
             partition_key: None,
-            same_party: None, // <--- The Missing Field
+            same_party: None,
         };
         
         self.tab.set_cookies(vec![cookie])?;
         log_info("Session cookie injected.");
-
         self.tab.reload(true, None)?;
         
         log_info("Verifying Session...");
@@ -126,13 +122,11 @@ impl<'a> InstagramBot<'a> {
             log_info("Session Login Successful!");
             return Ok(());
         }
-        
         if let Ok(el) = self.tab.find_element_by_xpath("//button[contains(text(), 'Not Now')]") {
              let _ = el.click();
              log_info("Session Login Successful (Popup dismissed).");
              return Ok(());
         }
-
         Err(anyhow!("Session Expired or Invalid. Please login manually."))
     }
 
@@ -174,7 +168,6 @@ impl<'a> InstagramBot<'a> {
 
                 if success {
                     log_info("Login Verified.");
-                    
                     log_info("Extracting Session ID...");
                     if let Ok(cookies) = self.tab.get_cookies() {
                         for c in cookies {
@@ -185,7 +178,6 @@ impl<'a> InstagramBot<'a> {
                             }
                         }
                     }
-                    
                     self.snapshot(PROOF_DIR, "login_success");
                     return Ok(());
                 }
@@ -281,9 +273,11 @@ impl<'a> InstagramBot<'a> {
 
     async fn download_active_story(&self, username: &str, history: &mut HashSet<String>) -> Result<bool> {
         for _attempt in 1..=20 { 
+            // Pause
             let js_freeze = r#"(function() { let v = document.querySelector('video'); if (v && !v.paused && v.readyState > 2) { v.pause(); } let pauseBtn = document.querySelector('svg[aria-label="Pause"]'); if (pauseBtn) { let btn = pauseBtn.closest('div[role="button"]') || pauseBtn.parentElement; if (btn) btn.click(); } })()"#;
             let _ = self.tab.evaluate(js_freeze, false);
 
+            // Identify
             let js_identify = r#"
                 (function() {
                     let urls = window.__intercepted_urls || [];
