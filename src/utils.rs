@@ -8,6 +8,7 @@ use base64::{Engine as _, engine::general_purpose};
 use serde::{Serialize, Deserialize};
 use crate::config::{DOWNLOAD_DIR, IMAGES_DIR, PROOF_DIR, ERROR_DIR, PROFILES_DIR};
 
+// --- PROFILE STRUCTURE ---
 #[derive(Serialize, Deserialize)]
 pub struct UserProfile {
     pub username: String,
@@ -36,7 +37,7 @@ pub fn clear_terminal() {
     let _ = std::io::stdout().flush();
 }
 
-// --- PROFILE MANAGEMENT ---
+// --- PROFILE MANAGEMENT (RESTORED) ---
 pub fn save_profile(username: &str, session_id: &str) -> Result<()> {
     let profile = UserProfile {
         username: username.to_string(),
@@ -52,6 +53,11 @@ pub fn save_profile(username: &str, session_id: &str) -> Result<()> {
 
 pub fn list_profiles() -> Result<Vec<String>> {
     let mut profiles = Vec::new();
+    // Ensure directory exists before reading
+    if !Path::new(PROFILES_DIR).exists() {
+        fs::create_dir_all(PROFILES_DIR)?;
+    }
+    
     let paths = fs::read_dir(PROFILES_DIR)?;
     for path in paths {
         let p = path?.path();
@@ -92,6 +98,7 @@ pub fn save_html(text: String, folder: &str, base_name: &str) {
     let _ = fs::write(&path, text);
 }
 
+// --- EXPERT: SAVE BASE64 VIDEO (WITH 15KB FIX) ---
 pub fn save_base64_file(base64_string: &str, filename: &str) -> Result<()> {
     let path = format!("{}/{}", DOWNLOAD_DIR, filename);
     
@@ -103,9 +110,13 @@ pub fn save_base64_file(base64_string: &str, filename: &str) -> Result<()> {
 
     let bytes = general_purpose::STANDARD.decode(clean_string)?;
 
-    // Validation: > 30KB (Smallest valid story image/video chunk)
-    if bytes.len() < 30_000 {
-        return Err(anyhow!("Decoded file too small ({} bytes). Rejected.", bytes.len()));
+    // EXPERT VALIDATION:
+    // Video: Must be > 200KB (To avoid headers/segments)
+    // Image: Must be > 15KB (To avoid tiny icons, but allow standard images)
+    let min_size = if filename.ends_with(".mp4") { 200_000 } else { 15_000 };
+
+    if bytes.len() < min_size {
+        return Err(anyhow!("File too small ({} bytes). Rejected.", bytes.len()));
     }
 
     let mut file = fs::File::create(&path)?;
