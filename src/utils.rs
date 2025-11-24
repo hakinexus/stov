@@ -8,7 +8,7 @@ use base64::{Engine as _, engine::general_purpose};
 use serde::{Serialize, Deserialize};
 use crate::config::{DOWNLOAD_DIR, IMAGES_DIR, PROOF_DIR, ERROR_DIR, PROFILES_DIR};
 
-// --- PROFILE STRUCTURE ---
+
 #[derive(Serialize, Deserialize)]
 pub struct UserProfile {
     pub username: String,
@@ -31,13 +31,12 @@ pub fn log_error(msg: &str) {
     eprintln!("{} {}", "[ERROR]".red().bold(), msg);
 }
 
-// --- UI CLEANER ---
+
 pub fn clear_terminal() {
     print!("\x1b[2J\x1b[3J\x1b[H");
     let _ = std::io::stdout().flush();
 }
 
-// --- PROFILE MANAGEMENT (RESTORED) ---
 pub fn save_profile(username: &str, session_id: &str) -> Result<()> {
     let profile = UserProfile {
         username: username.to_string(),
@@ -53,7 +52,7 @@ pub fn save_profile(username: &str, session_id: &str) -> Result<()> {
 
 pub fn list_profiles() -> Result<Vec<String>> {
     let mut profiles = Vec::new();
-    // Ensure directory exists before reading
+
     if !Path::new(PROFILES_DIR).exists() {
         fs::create_dir_all(PROFILES_DIR)?;
     }
@@ -79,7 +78,7 @@ pub fn load_profile_session(username: &str) -> Result<String> {
     Ok(profile.session_id)
 }
 
-// --- MEDIA SAVING ---
+
 pub fn save_screenshot(data: Vec<u8>, folder: &str, base_name: &str) -> Result<()> {
     if !Path::new(folder).exists() { fs::create_dir_all(folder)?; }
     let mut rng = rand::thread_rng();
@@ -98,7 +97,6 @@ pub fn save_html(text: String, folder: &str, base_name: &str) {
     let _ = fs::write(&path, text);
 }
 
-// --- EXPERT: SAVE BASE64 VIDEO (WITH 15KB FIX) ---
 pub fn save_base64_file(base64_string: &str, filename: &str) -> Result<()> {
     let path = format!("{}/{}", DOWNLOAD_DIR, filename);
     
@@ -110,9 +108,7 @@ pub fn save_base64_file(base64_string: &str, filename: &str) -> Result<()> {
 
     let bytes = general_purpose::STANDARD.decode(clean_string)?;
 
-    // EXPERT VALIDATION:
-    // Video: Must be > 200KB (To avoid headers/segments)
-    // Image: Must be > 15KB (To avoid tiny icons, but allow standard images)
+    
     let min_size = if filename.ends_with(".mp4") { 200_000 } else { 15_000 };
 
     if bytes.len() < min_size {

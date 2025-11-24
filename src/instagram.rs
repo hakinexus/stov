@@ -273,12 +273,12 @@ impl<'a> InstagramBot<'a> {
     }
 
     async fn download_active_story(&self, username: &str, history: &mut HashSet<String>) -> Result<bool> {
-        // Use a local blacklist for this specific slide attempt to prevent spam loop
+
         let mut failed_urls_this_slide: HashSet<String> = HashSet::new();
 
         for _attempt in 1..=20 { 
             
-            // A. PAUSE
+            
             let js_freeze = r#"
                 (function() {
                     let v = document.querySelector('video');
@@ -292,8 +292,7 @@ impl<'a> InstagramBot<'a> {
             "#;
             let _ = self.tab.evaluate(js_freeze, false);
 
-            // B. IDENTIFY
-            // We added aspect ratio checks here
+
             let js_identify = r#"
                 (function() {
                     const screenW = window.innerWidth;
@@ -303,11 +302,10 @@ impl<'a> InstagramBot<'a> {
                         const rect = el.getBoundingClientRect();
                         if (rect.width < 200) return false;
                         
-                        // Aspect Ratio Check: Stories are vertical (height > width)
-                        // Some stories are square-ish, but generally taller.
-                        if (rect.height < rect.width * 0.8) return false; // Reject horizontal banners
 
-                        // Center Check
+                        if (rect.height < rect.width * 0.8) return false; 
+
+                        
                         const centerX = rect.left + rect.width / 2;
                         const isCentered = (Math.abs(centerX - screenW / 2) < screenW * 0.4);
                         return isCentered;
@@ -316,16 +314,16 @@ impl<'a> InstagramBot<'a> {
                     let urls = window.__intercepted_urls || [];
                     let candidates = [];
                     
-                    // 1. NET
+                    
                     for (let i = urls.length - 1; i >= 0; i--) { candidates.push("NET|" + urls[i]); }
                     
-                    // 2. DOM VIDEO
+                    
                     let v = document.querySelector('video');
                     if (v && isMainElement(v) && v.currentSrc && !v.currentSrc.startsWith('blob:')) {
                         candidates.push("DOM_VIDEO|" + v.currentSrc);
                     }
 
-                    // 3. DOM IMAGE
+                    
                     let images = Array.from(document.querySelectorAll('img'));
                     let target = images.find(i => isMainElement(i) && !i.src.includes('150x150') && !i.alt.includes('profile'));
                     if (target) {
@@ -363,9 +361,9 @@ impl<'a> InstagramBot<'a> {
                     if let Some(idx) = url.find("?bytestart") { url = url[..idx].to_string(); }
                 }
 
-                // Skip if we successfully downloaded it before
+                
                 if history.contains(&url) { continue; }
-                // Skip if we already tried and failed this specific URL on this slide
+               
                 if failed_urls_this_slide.contains(&url) { continue; }
 
                 let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
@@ -398,12 +396,11 @@ impl<'a> InstagramBot<'a> {
                                     found_new = true;
                                     break; 
                                 } else {
-                                    // VALIDATION FAILED (Too small)
-                                    // Add to failed set so we don't spam "Downloading..." log
+                                    
                                     failed_urls_this_slide.insert(url);
                                 }
                             } else {
-                                // Fetch error (CORS/Network)
+
                                 failed_urls_this_slide.insert(url);
                             }
                         }
