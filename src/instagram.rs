@@ -48,6 +48,7 @@ impl<'a> InstagramBot<'a> {
                 window.__intercepted_urls = [];
                 const observer = new PerformanceObserver((list) => {
                     list.getEntries().forEach((entry) => {
+                        // Capture MP4s and High-Res JPGs
                         if (entry.name.includes('.mp4') || (entry.name.includes('.jpg') && entry.name.includes('instagram'))) {
                             window.__intercepted_urls.push(entry.name);
                         }
@@ -224,6 +225,7 @@ impl<'a> InstagramBot<'a> {
         self.inject_sniffer();
         
         if let Ok(el) = self.tab.find_element(SEL_STORY_RING) { let _ = el.click(); }
+        
         thread::sleep(Duration::from_secs(3));
 
         let mut downloaded_history: HashSet<String> = HashSet::new();
@@ -231,7 +233,9 @@ impl<'a> InstagramBot<'a> {
         let mut consecutive_errors = 0;
 
         log_info(&format!("Starting batch extraction for: {}", username));
-        self.clear_network_logs();
+        
+        // EXPERT FIX: REMOVED "self.clear_network_logs()" HERE.
+        // We want the logs that accumulated during the 3-second startup to remain available for the first story.
 
         loop {
             let current_url = self.tab.get_url();
@@ -243,7 +247,10 @@ impl<'a> InstagramBot<'a> {
                     story_count += 1;
                     consecutive_errors = 0;
                     log_info(&format!("Story #{} Saved.", story_count));
+                    
+                    // Clear logs ONLY AFTER we are done with the current story
                     self.clear_network_logs(); 
+                    
                     log_info("Moving to next...");
                     let _ = self.tab.press_key("ArrowRight");
                     thread::sleep(Duration::from_millis(1500));
@@ -273,65 +280,43 @@ impl<'a> InstagramBot<'a> {
     }
 
     async fn download_active_story(&self, username: &str, history: &mut HashSet<String>) -> Result<bool> {
-
-        let mut failed_urls_this_slide: HashSet<String> = HashSet::new();
-
         for _attempt in 1..=20 { 
-            
-            
-            let js_freeze = r#"
-                (function() {
-                    let v = document.querySelector('video');
-                    if (v && !v.paused && v.readyState > 2) { v.pause(); }
-                    let pauseBtn = document.querySelector('svg[aria-label="Pause"]');
-                    if (pauseBtn) {
-                        let btn = pauseBtn.closest('div[role="button"]') || pauseBtn.parentElement;
-                        if (btn) btn.click();
-                    }
-                })()
-            "#;
+            let js_freeze = r#"(function() { let v = document.querySelector('video'); if (v && !v.paused && v.readyState > 2) { v.pause(); } let pauseBtn = document.querySelector('svg[aria-label="Pause"]'); if (pauseBtn) { let btn = pauseBtn.closest('div[role="button"]') || pauseBtn.parentElement; if (btn) btn.click(); } })()"#;
             let _ = self.tab.evaluate(js_freeze, false);
-
 
             let js_identify = r#"
                 (function() {
-                    const screenW = window.innerWidth;
-                    const screenH = window.innerHeight;
-
-                    function isMainElement(el) {
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width < 200) return false;
-                        
-
-                        if (rect.height < rect.width * 0.8) return false; 
-
-                        
-                        const centerX = rect.left + rect.width / 2;
-                        const isCentered = (Math.abs(centerX - screenW / 2) < screenW * 0.4);
-                        return isCentered;
-                    }
-
                     let urls = window.__intercepted_urls || [];
                     let candidates = [];
-                    
-                    
+                    // 1. NET
                     for (let i = urls.length - 1; i >= 0; i--) { candidates.push("NET|" + urls[i]); }
                     
-                    
+                    // 2. DOM VIDEO
                     let v = document.querySelector('video');
-                    if (v && isMainElement(v) && v.currentSrc && !v.currentSrc.startsWith('blob:')) {
-                        candidates.push("DOM_VIDEO|" + v.currentSrc);
-                    }
+                    if (v && v.currentSrc && !v.currentSrc.startsWith('blob:')) candidates.push("DOM_VIDEO|" + v.currentSrc);
 
-                    
+                    // 3. DOM IMAGE
                     let images = Array.from(document.querySelectorAll('img'));
-                    let target = images.find(i => isMainElement(i) && !i.src.includes('150x150') && !i.alt.includes('profile'));
+                    // Filter: Must be vertical (> 300px wide, Height > Width)
+                    let target = images.find(i => 
+                        i.naturalWidth > 300 && 
+                        i.naturalHeight > i.naturalWidth && 
+                        !i.alt.includes('profile')
+                    );
+
                     if (target) {
                          if (target.srcset) {
+                             // Parse srcset to find largest
                              let parts = target.srcset.split(',');
-                             candidates.push("DOM_IMAGE|" + parts[parts.length - 1].trim().split(' ')[0]);
+                             let best = parts.reduce((prev, curr) => {
+                                 let wCurr = parseInt(curr.trim().split(' ')[1]) || 0;
+                                 let wPrev = parseInt(prev.trim().split(' ')[1]) || 0;
+                                 return wCurr > wPrev ? curr : prev;
+                             });
+                             candidates.push("DOM_IMAGE|" + best.trim().split(' ')[0]);
+                         } else {
+                             candidates.push("DOM_IMAGE|" + target.src);
                          }
-                         candidates.push("DOM_IMAGE|" + target.src);
                     }
 
                     return [...new Set(candidates)].join(';');
@@ -350,27 +335,21 @@ impl<'a> InstagramBot<'a> {
                 if item.is_empty() { continue; }
                 let parts: Vec<&str> = item.split('|').collect();
                 if parts.len() < 2 { continue; }
-                
-                let source_type = parts[0]; 
                 let mut url = parts[1].to_string();
-
-                if url.len() < 15 { continue; }
-
+                if url.len() < 10 { continue; }
+                
                 if url.contains(".mp4") {
                     if let Some(idx) = url.find("&bytestart") { url = url[..idx].to_string(); }
                     if let Some(idx) = url.find("?bytestart") { url = url[..idx].to_string(); }
                 }
 
-                
                 if history.contains(&url) { continue; }
-               
-                if failed_urls_this_slide.contains(&url) { continue; }
 
                 let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
                 let ext = if url.contains(".mp4") { "mp4" } else { "jpg" };
                 let fname = format!("{}_{}.{}", username, timestamp, ext);
 
-                log_info(&format!("Found {} via {}! Downloading...", ext, source_type));
+                log_info(&format!("Found {}! Downloading...", ext));
 
                 let js_fetch = format!(r#"
                     (async function() {{
@@ -395,20 +374,13 @@ impl<'a> InstagramBot<'a> {
                                     history.insert(url);
                                     found_new = true;
                                     break; 
-                                } else {
-                                    
-                                    failed_urls_this_slide.insert(url);
                                 }
-                            } else {
-
-                                failed_urls_this_slide.insert(url);
                             }
                         }
                     },
-                    Err(_) => { failed_urls_this_slide.insert(url); }
+                    Err(_) => {}
                 }
             }
-
             if found_new { return Ok(true); }
             thread::sleep(Duration::from_millis(500));
         }
