@@ -23,12 +23,10 @@ pub fn launch_browser() -> Result<Browser> {
     let termux_path = find_chromium_path()?;
     let ua_arg = format!("--user-agent={}", USER_AGENT);
     
-    
     let random_id: u32 = rand::random();
     let temp_dir = std::env::temp_dir().join(format!("chrome_stov_{}", random_id));
     let user_data_arg = format!("--user-data-dir={}", temp_dir.to_string_lossy());
 
-    
     let has_display = env::var("DISPLAY").is_ok();
     
     if has_display {
@@ -45,7 +43,9 @@ pub fn launch_browser() -> Result<Browser> {
         "--no-zygote",                
         "--single-process",           
         "--ignore-certificate-errors",
-        "--window-size=1280,720",
+        // EXPERT FIX: Force High-Res Vertical Viewport (1080x1920)
+        // This forces Instagram to serve the '1080w' source.
+        "--window-size=1080,1920",
         "--disable-software-rasterizer",
         "--disable-default-apps",
         "--disable-extensions",
@@ -63,7 +63,8 @@ pub fn launch_browser() -> Result<Browser> {
         headless: !has_display, 
         sandbox: false,
         path: Some(termux_path),
-        window_size: Some((1280, 720)),
+        // Match the CLI arg to ensure the internal renderer matches
+        window_size: Some((1080, 1920)),
         enable_gpu: false,
         args: args_vec.iter().map(|s| OsStr::new(s)).collect(),
         ..Default::default()
