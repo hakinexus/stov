@@ -1,7 +1,7 @@
-// Browser Identity
+
 pub const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36";
 
-// Paths
+
 pub const CHROME_PATH: &str = "/data/data/com.termux/files/usr/bin/chromium";
 pub const DOWNLOAD_DIR: &str = "./downloads";
 pub const IMAGES_DIR: &str = "./images";
@@ -9,7 +9,7 @@ pub const PROOF_DIR: &str = "./images/login_proofs";
 pub const ERROR_DIR: &str = "./images/story_errors";
 pub const PROFILES_DIR: &str = "./profiles";
 
-// --- Selectors ---
+
 pub const USER_CSS: &str = "input[name='username']";
 pub const USER_XPATH_1: &str = "//input[contains(@aria-label, 'username') or contains(@aria-label, 'Mobile')]";
 pub const USER_XPATH_2: &str = "//input[@type='text']";

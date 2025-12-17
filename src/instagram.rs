@@ -222,6 +222,7 @@ impl<'a> InstagramBot<'a> {
 
     async fn process_story_batch(&self, username: &str) -> Result<()> {
         self.inject_sniffer();
+        
         if let Ok(el) = self.tab.find_element(SEL_STORY_RING) { let _ = el.click(); }
         thread::sleep(Duration::from_secs(3));
 
@@ -272,29 +273,67 @@ impl<'a> InstagramBot<'a> {
     }
 
     async fn download_active_story(&self, username: &str, history: &mut HashSet<String>) -> Result<bool> {
+
+        let mut failed_urls_this_slide: HashSet<String> = HashSet::new();
+
         for _attempt in 1..=20 { 
-            // Pause
-            let js_freeze = r#"(function() { let v = document.querySelector('video'); if (v && !v.paused && v.readyState > 2) { v.pause(); } let pauseBtn = document.querySelector('svg[aria-label="Pause"]'); if (pauseBtn) { let btn = pauseBtn.closest('div[role="button"]') || pauseBtn.parentElement; if (btn) btn.click(); } })()"#;
+            
+            
+            let js_freeze = r#"
+                (function() {
+                    let v = document.querySelector('video');
+                    if (v && !v.paused && v.readyState > 2) { v.pause(); }
+                    let pauseBtn = document.querySelector('svg[aria-label="Pause"]');
+                    if (pauseBtn) {
+                        let btn = pauseBtn.closest('div[role="button"]') || pauseBtn.parentElement;
+                        if (btn) btn.click();
+                    }
+                })()
+            "#;
             let _ = self.tab.evaluate(js_freeze, false);
 
-            // Identify
+
             let js_identify = r#"
                 (function() {
+                    const screenW = window.innerWidth;
+                    const screenH = window.innerHeight;
+
+                    function isMainElement(el) {
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width < 200) return false;
+                        
+
+                        if (rect.height < rect.width * 0.8) return false; 
+
+                        
+                        const centerX = rect.left + rect.width / 2;
+                        const isCentered = (Math.abs(centerX - screenW / 2) < screenW * 0.4);
+                        return isCentered;
+                    }
+
                     let urls = window.__intercepted_urls || [];
                     let candidates = [];
+                    
+                    
                     for (let i = urls.length - 1; i >= 0; i--) { candidates.push("NET|" + urls[i]); }
+                    
+                    
                     let v = document.querySelector('video');
-                    if (v && v.currentSrc && !v.currentSrc.startsWith('blob:')) candidates.push("DOM_VIDEO|" + v.currentSrc);
-                    let images = Array.from(document.querySelectorAll('img'));
-                    for (let img of images) {
-                        if (img.naturalWidth > 300 && img.src.includes('instagram')) {
-                             candidates.push("DOM_IMAGE|" + img.src);
-                             if (img.srcset) {
-                                 let parts = img.srcset.split(',');
-                                 candidates.push("DOM_IMAGE|" + parts[parts.length - 1].trim().split(' ')[0]);
-                             }
-                        }
+                    if (v && isMainElement(v) && v.currentSrc && !v.currentSrc.startsWith('blob:')) {
+                        candidates.push("DOM_VIDEO|" + v.currentSrc);
                     }
+
+                    
+                    let images = Array.from(document.querySelectorAll('img'));
+                    let target = images.find(i => isMainElement(i) && !i.src.includes('150x150') && !i.alt.includes('profile'));
+                    if (target) {
+                         if (target.srcset) {
+                             let parts = target.srcset.split(',');
+                             candidates.push("DOM_IMAGE|" + parts[parts.length - 1].trim().split(' ')[0]);
+                         }
+                         candidates.push("DOM_IMAGE|" + target.src);
+                    }
+
                     return [...new Set(candidates)].join(';');
                 })()
             "#;
@@ -311,21 +350,27 @@ impl<'a> InstagramBot<'a> {
                 if item.is_empty() { continue; }
                 let parts: Vec<&str> = item.split('|').collect();
                 if parts.len() < 2 { continue; }
-                let mut url = parts[1].to_string();
-                if url.len() < 10 { continue; }
                 
+                let source_type = parts[0]; 
+                let mut url = parts[1].to_string();
+
+                if url.len() < 15 { continue; }
+
                 if url.contains(".mp4") {
                     if let Some(idx) = url.find("&bytestart") { url = url[..idx].to_string(); }
                     if let Some(idx) = url.find("?bytestart") { url = url[..idx].to_string(); }
                 }
 
+                
                 if history.contains(&url) { continue; }
+               
+                if failed_urls_this_slide.contains(&url) { continue; }
 
                 let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
                 let ext = if url.contains(".mp4") { "mp4" } else { "jpg" };
                 let fname = format!("{}_{}.{}", username, timestamp, ext);
 
-                log_info(&format!("Found {}! Downloading...", ext));
+                log_info(&format!("Found {} via {}! Downloading...", ext, source_type));
 
                 let js_fetch = format!(r#"
                     (async function() {{
@@ -350,13 +395,20 @@ impl<'a> InstagramBot<'a> {
                                     history.insert(url);
                                     found_new = true;
                                     break; 
+                                } else {
+                                    
+                                    failed_urls_this_slide.insert(url);
                                 }
+                            } else {
+
+                                failed_urls_this_slide.insert(url);
                             }
                         }
                     },
-                    Err(_) => {}
+                    Err(_) => { failed_urls_this_slide.insert(url); }
                 }
             }
+
             if found_new { return Ok(true); }
             thread::sleep(Duration::from_millis(500));
         }

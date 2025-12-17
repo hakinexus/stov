@@ -8,6 +8,7 @@ use base64::{Engine as _, engine::general_purpose};
 use serde::{Serialize, Deserialize};
 use crate::config::{DOWNLOAD_DIR, IMAGES_DIR, PROOF_DIR, ERROR_DIR, PROFILES_DIR};
 
+
 #[derive(Serialize, Deserialize)]
 pub struct UserProfile {
     pub username: String,
@@ -30,13 +31,12 @@ pub fn log_error(msg: &str) {
     eprintln!("{} {}", "[ERROR]".red().bold(), msg);
 }
 
-// --- UI CLEANER ---
+
 pub fn clear_terminal() {
     print!("\x1b[2J\x1b[3J\x1b[H");
     let _ = std::io::stdout().flush();
 }
 
-// --- PROFILE MANAGEMENT ---
 pub fn save_profile(username: &str, session_id: &str) -> Result<()> {
     let profile = UserProfile {
         username: username.to_string(),
@@ -52,6 +52,11 @@ pub fn save_profile(username: &str, session_id: &str) -> Result<()> {
 
 pub fn list_profiles() -> Result<Vec<String>> {
     let mut profiles = Vec::new();
+
+    if !Path::new(PROFILES_DIR).exists() {
+        fs::create_dir_all(PROFILES_DIR)?;
+    }
+    
     let paths = fs::read_dir(PROFILES_DIR)?;
     for path in paths {
         let p = path?.path();
@@ -73,7 +78,7 @@ pub fn load_profile_session(username: &str) -> Result<String> {
     Ok(profile.session_id)
 }
 
-// --- MEDIA SAVING ---
+
 pub fn save_screenshot(data: Vec<u8>, folder: &str, base_name: &str) -> Result<()> {
     if !Path::new(folder).exists() { fs::create_dir_all(folder)?; }
     let mut rng = rand::thread_rng();
@@ -103,9 +108,11 @@ pub fn save_base64_file(base64_string: &str, filename: &str) -> Result<()> {
 
     let bytes = general_purpose::STANDARD.decode(clean_string)?;
 
-    // Validation: > 30KB (Smallest valid story image/video chunk)
-    if bytes.len() < 30_000 {
-        return Err(anyhow!("Decoded file too small ({} bytes). Rejected.", bytes.len()));
+    
+    let min_size = if filename.ends_with(".mp4") { 200_000 } else { 15_000 };
+
+    if bytes.len() < min_size {
+        return Err(anyhow!("File too small ({} bytes). Rejected.", bytes.len()));
     }
 
     let mut file = fs::File::create(&path)?;

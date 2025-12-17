@@ -23,12 +23,12 @@ pub fn launch_browser() -> Result<Browser> {
     let termux_path = find_chromium_path()?;
     let ua_arg = format!("--user-agent={}", USER_AGENT);
     
-    // Zombie Killer: Unique profile per run
+    
     let random_id: u32 = rand::random();
     let temp_dir = std::env::temp_dir().join(format!("chrome_stov_{}", random_id));
     let user_data_arg = format!("--user-data-dir={}", temp_dir.to_string_lossy());
 
-    // Smart Display Detection
+    
     let has_display = env::var("DISPLAY").is_ok();
     
     if has_display {
