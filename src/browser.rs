@@ -43,14 +43,16 @@ pub fn launch_browser() -> Result<Browser> {
         "--no-zygote",                
         "--single-process",           
         "--ignore-certificate-errors",
-        // EXPERT FIX: Force High-Res Vertical Viewport (1080x1920)
-        // This forces Instagram to serve the '1080w' source.
-        "--window-size=1080,1920",
+        "--window-size=1080,1920", // Force Mobile High-Res
         "--disable-software-rasterizer",
         "--disable-default-apps",
         "--disable-extensions",
         "--disable-sync",
         "--no-first-run",
+        // EXPERT FIX: DISABLE AUTOPLAY POLICY
+        // This allows us to unmute video via JS without clicking
+        "--autoplay-policy=no-user-gesture-required",
+        "--use-fake-ui-for-media-stream",
         &user_data_arg,
         &ua_arg
     ];
@@ -63,7 +65,6 @@ pub fn launch_browser() -> Result<Browser> {
         headless: !has_display, 
         sandbox: false,
         path: Some(termux_path),
-        // Match the CLI arg to ensure the internal renderer matches
         window_size: Some((1080, 1920)),
         enable_gpu: false,
         args: args_vec.iter().map(|s| OsStr::new(s)).collect(),

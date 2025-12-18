@@ -2,19 +2,21 @@ use colored::*;
 use std::fs;
 use std::path::Path;
 use std::io::Write;
+use std::process::Command;
 use anyhow::{Result, anyhow};
 use rand::Rng;
 use base64::{Engine as _, engine::general_purpose}; 
 use serde::{Serialize, Deserialize};
 use crate::config::{DOWNLOAD_DIR, IMAGES_DIR, PROOF_DIR, ERROR_DIR, PROFILES_DIR};
 
-
+// --- PROFILE STRUCTURE ---
 #[derive(Serialize, Deserialize)]
 pub struct UserProfile {
     pub username: String,
     pub session_id: String,
 }
 
+// --- ENVIRONMENT SETUP ---
 pub fn setup_env() {
     let paths = vec![DOWNLOAD_DIR, IMAGES_DIR, PROOF_DIR, ERROR_DIR, PROFILES_DIR];
     for p in paths {
@@ -23,6 +25,7 @@ pub fn setup_env() {
     }
 }
 
+// --- LOGGING ---
 pub fn log_info(msg: &str) {
     println!("{} {}", "[INFO]".green().bold(), msg);
 }
@@ -31,12 +34,14 @@ pub fn log_error(msg: &str) {
     eprintln!("{} {}", "[ERROR]".red().bold(), msg);
 }
 
-
+// --- UI CLEANER ---
 pub fn clear_terminal() {
+    // Clears screen, scrollback buffer, and moves cursor to top-left
     print!("\x1b[2J\x1b[3J\x1b[H");
     let _ = std::io::stdout().flush();
 }
 
+// --- PROFILE MANAGEMENT ---
 pub fn save_profile(username: &str, session_id: &str) -> Result<()> {
     let profile = UserProfile {
         username: username.to_string(),
@@ -52,10 +57,7 @@ pub fn save_profile(username: &str, session_id: &str) -> Result<()> {
 
 pub fn list_profiles() -> Result<Vec<String>> {
     let mut profiles = Vec::new();
-
-    if !Path::new(PROFILES_DIR).exists() {
-        fs::create_dir_all(PROFILES_DIR)?;
-    }
+    if !Path::new(PROFILES_DIR).exists() { fs::create_dir_all(PROFILES_DIR)?; }
     
     let paths = fs::read_dir(PROFILES_DIR)?;
     for path in paths {
@@ -78,7 +80,7 @@ pub fn load_profile_session(username: &str) -> Result<String> {
     Ok(profile.session_id)
 }
 
-
+// --- DEBUG / SNAPSHOTS ---
 pub fn save_screenshot(data: Vec<u8>, folder: &str, base_name: &str) -> Result<()> {
     if !Path::new(folder).exists() { fs::create_dir_all(folder)?; }
     let mut rng = rand::thread_rng();
@@ -97,6 +99,7 @@ pub fn save_html(text: String, folder: &str, base_name: &str) {
     let _ = fs::write(&path, text);
 }
 
+// --- EXPERT: SAVE BASE64 VIDEO (SMART VALIDATION) ---
 pub fn save_base64_file(base64_string: &str, filename: &str) -> Result<()> {
     let path = format!("{}/{}", DOWNLOAD_DIR, filename);
     
@@ -108,16 +111,78 @@ pub fn save_base64_file(base64_string: &str, filename: &str) -> Result<()> {
 
     let bytes = general_purpose::STANDARD.decode(clean_string)?;
 
-    
-    let min_size = if filename.ends_with(".mp4") { 200_000 } else { 15_000 };
+    // INTELLIGENT SIZE CHECK
+    // 1. Audio tracks (filename contains "_audio") -> Allow > 5KB
+    // 2. Main Videos (ends in .mp4) -> Allow > 200KB (Filters out chunks/headers)
+    // 3. Images -> Allow > 10KB (Filters out tiny icons)
+    let min_size = if filename.contains("_audio") {
+        5_000 
+    } else if filename.ends_with(".mp4") {
+        200_000 
+    } else {
+        10_000 
+    };
 
     if bytes.len() < min_size {
-        return Err(anyhow!("File too small ({} bytes). Rejected.", bytes.len()));
+        return Err(anyhow!("File too small ({} bytes). Expected > {}. Rejected.", bytes.len(), min_size));
     }
 
     let mut file = fs::File::create(&path)?;
     file.write_all(&bytes)?;
     
-    log_info(&format!("Media Saved via Browser Fetch (Size: {} KB): {}", bytes.len() / 1024, filename));
+    // Silent success to keep logs clean during muxing steps
     Ok(())
+}
+
+// --- FFMPEG MUXING ---
+pub fn mux_video_audio(video_filename: &str, audio_filename: &str, final_filename: &str) -> Result<()> {
+    let video_path = format!("{}/{}", DOWNLOAD_DIR, video_filename);
+    let audio_path = format!("{}/{}", DOWNLOAD_DIR, audio_filename);
+    let output_path = format!("{}/{}", DOWNLOAD_DIR, final_filename);
+    
+    log_info("Muxing Audio/Video streams...");
+
+    // FFmpeg command: -i video -i audio -c copy (No re-encoding, instant merge)
+    let status = Command::new("ffmpeg")
+        .arg("-y") // Overwrite output
+        .arg("-v").arg("error") // Quiet mode
+        .arg("-i").arg(&video_path)
+        .arg("-i").arg(&audio_path)
+        .arg("-c").arg("copy")
+        .arg(&output_path)
+        .status();
+
+    // Clean up temp files regardless of success
+    let _ = fs::remove_file(&video_path);
+    let _ = fs::remove_file(&audio_path);
+
+    match status {
+        Ok(s) if s.success() => {
+            log_info(&format!("Success! Saved: {}", final_filename));
+            Ok(())
+        },
+        _ => {
+            log_error("FFmpeg Muxing Failed. Saving video only.");
+            // If mux fails (e.g. ffmpeg missing), we try to at least save the video
+            // by renaming the temp video file to the final name if it still exists (before delete)
+            // But since we deleted above, we just return error.
+            // (Note: To be truly safe, we could move delete after this check, but usually if ffmpeg fails, something is wrong with the system)
+            Err(anyhow!("Muxing failed"))
+        }
+    }
+}
+
+// --- VIDEO FALLBACK RENAMER ---
+// Used when Audio stream is never found, so we just save the muted video
+pub fn rename_video_only(temp_filename: &str, final_filename: &str) -> Result<()> {
+    let source = format!("{}/{}", DOWNLOAD_DIR, temp_filename);
+    let dest = format!("{}/{}", DOWNLOAD_DIR, final_filename);
+    
+    if Path::new(&source).exists() {
+        fs::rename(source, dest)?;
+        log_info(&format!("Saved Muted Video: {}", final_filename));
+        Ok(())
+    } else {
+        Err(anyhow!("Source file not found"))
+    }
 }

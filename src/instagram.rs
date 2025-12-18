@@ -6,7 +6,7 @@ use rand::Rng;
 use anyhow::{Result, anyhow};
 use std::collections::HashSet; 
 use crate::config::*;
-use crate::utils::{log_info, log_error, save_base64_file, save_screenshot, save_html, save_profile};
+use crate::utils::{log_info, log_error, save_base64_file, save_screenshot, save_html, save_profile, mux_video_audio, rename_video_only};
 
 pub struct InstagramBot<'a> {
     _browser: &'a Browser,
@@ -48,9 +48,12 @@ impl<'a> InstagramBot<'a> {
                 window.__intercepted_urls = [];
                 const observer = new PerformanceObserver((list) => {
                     list.getEntries().forEach((entry) => {
-                        // Capture MP4s and High-Res JPGs
-                        if (entry.name.includes('.mp4') || (entry.name.includes('.jpg') && entry.name.includes('instagram'))) {
-                            window.__intercepted_urls.push(entry.name);
+                        // Capture MP4, M4A, JPG
+                        if (entry.name.includes('.mp4') || entry.name.includes('.m4a') || (entry.name.includes('.jpg') && entry.name.includes('instagram'))) {
+                            window.__intercepted_urls.push({
+                                url: entry.name,
+                                size: entry.transferSize || 0
+                            });
                         }
                     });
                 });
@@ -169,12 +172,11 @@ impl<'a> InstagramBot<'a> {
 
                 if success {
                     log_info("Login Verified.");
-                    log_info("Extracting Session ID...");
                     if let Ok(cookies) = self.tab.get_cookies() {
                         for c in cookies {
                             if c.name == "sessionid" {
                                 let _ = save_profile(user, &c.value);
-                                log_info("Profile saved to profiles/ folder.");
+                                log_info("Profile saved.");
                                 break;
                             }
                         }
@@ -193,7 +195,7 @@ impl<'a> InstagramBot<'a> {
             }
 
             if retry_needed {
-                log_info("Waiting 3 seconds before retrying click...");
+                log_info("Waiting 3s before retry...");
                 thread::sleep(Duration::from_secs(3));
                 continue; 
             } else if attempt == 3 {
@@ -223,19 +225,15 @@ impl<'a> InstagramBot<'a> {
 
     async fn process_story_batch(&self, username: &str) -> Result<()> {
         self.inject_sniffer();
-        
         if let Ok(el) = self.tab.find_element(SEL_STORY_RING) { let _ = el.click(); }
-        
         thread::sleep(Duration::from_secs(3));
 
         let mut downloaded_history: HashSet<String> = HashSet::new();
         let mut story_count = 0;
         let mut consecutive_errors = 0;
 
-        log_info(&format!("Starting batch extraction for: {}", username));
-        
-        // EXPERT FIX: REMOVED "self.clear_network_logs()" HERE.
-        // We want the logs that accumulated during the 3-second startup to remain available for the first story.
+        // EXPERT: Do NOT clear logs here. We need the logs from the first video load.
+        // self.clear_network_logs(); 
 
         loop {
             let current_url = self.tab.get_url();
@@ -247,17 +245,14 @@ impl<'a> InstagramBot<'a> {
                     story_count += 1;
                     consecutive_errors = 0;
                     log_info(&format!("Story #{} Saved.", story_count));
-                    
-                    // Clear logs ONLY AFTER we are done with the current story
-                    self.clear_network_logs(); 
-                    
+                    self.clear_network_logs(); // Clear logs ONLY after success
                     log_info("Moving to next...");
                     let _ = self.tab.press_key("ArrowRight");
                     thread::sleep(Duration::from_millis(1500));
                 },
                 Ok(false) => {
                     consecutive_errors += 1;
-                    log_info("Skipping (No new media found)...");
+                    log_info("Skipping...");
                     let _ = self.tab.press_key("ArrowRight");
                     thread::sleep(Duration::from_millis(1500));
                 },
@@ -270,7 +265,7 @@ impl<'a> InstagramBot<'a> {
             }
 
             if consecutive_errors > 8 {
-                log_info("Too many consecutive errors. Exiting batch.");
+                log_info("Too many errors. Exiting batch.");
                 let _ = self.tab.press_key("Escape");
                 break;
             }
@@ -280,45 +275,62 @@ impl<'a> InstagramBot<'a> {
     }
 
     async fn download_active_story(&self, username: &str, history: &mut HashSet<String>) -> Result<bool> {
-        for _attempt in 1..=20 { 
-            let js_freeze = r#"(function() { let v = document.querySelector('video'); if (v && !v.paused && v.readyState > 2) { v.pause(); } let pauseBtn = document.querySelector('svg[aria-label="Pause"]'); if (pauseBtn) { let btn = pauseBtn.closest('div[role="button"]') || pauseBtn.parentElement; if (btn) btn.click(); } })()"#;
+        let mut audio_wait_counter = 0;
+
+        for _attempt in 1..=25 { 
+            
+            // 1. FORCE AUDIO/VIDEO UNMUTE
+            let js_freeze = r#"
+                (function() {
+                    let v = document.querySelector('video');
+                    if (v) {
+                        v.muted = false; // Trigger Audio Request
+                        v.volume = 1.0;
+                        if (!v.paused && v.readyState > 2) { v.pause(); }
+                    }
+                    // Handle Image Pause
+                    let pauseBtn = document.querySelector('svg[aria-label="Pause"]');
+                    if (pauseBtn) {
+                        let btn = pauseBtn.closest('div[role="button"]') || pauseBtn.parentElement;
+                        if (btn) btn.click();
+                    }
+                })()
+            "#;
             let _ = self.tab.evaluate(js_freeze, false);
 
+            // 2. IDENTIFY ASSETS
             let js_identify = r#"
                 (function() {
                     let urls = window.__intercepted_urls || [];
                     let candidates = [];
-                    // 1. NET
-                    for (let i = urls.length - 1; i >= 0; i--) { candidates.push("NET|" + urls[i]); }
-                    
-                    // 2. DOM VIDEO
-                    let v = document.querySelector('video');
-                    if (v && v.currentSrc && !v.currentSrc.startsWith('blob:')) candidates.push("DOM_VIDEO|" + v.currentSrc);
-
-                    // 3. DOM IMAGE
+                    // NET STREAMS
+                    for (let entry of urls) {
+                        let size = entry.size || 0;
+                        if (entry.url.includes('.mp4') || entry.url.includes('.m4a')) {
+                            candidates.push("NET_MP4|" + entry.url + "|" + size);
+                        } else if (entry.url.includes('.jpg')) {
+                            candidates.push("NET_JPG|" + entry.url + "|" + size);
+                        }
+                    }
+                    // DOM IMAGE (Strict Vertical Check)
                     let images = Array.from(document.querySelectorAll('img'));
-                    // Filter: Must be vertical (> 300px wide, Height > Width)
-                    let target = images.find(i => 
-                        i.naturalWidth > 300 && 
-                        i.naturalHeight > i.naturalWidth && 
-                        !i.alt.includes('profile')
-                    );
-
+                    // Filter: Must be Vertical (Height > Width) AND Large (>300px)
+                    // This ignores square profile pics and feed posts.
+                    let target = images.find(i => i.naturalWidth > 300 && i.naturalHeight > i.naturalWidth && !i.alt.includes('profile'));
                     if (target) {
                          if (target.srcset) {
-                             // Parse srcset to find largest
+                             // Grab largest from srcset
                              let parts = target.srcset.split(',');
                              let best = parts.reduce((prev, curr) => {
                                  let wCurr = parseInt(curr.trim().split(' ')[1]) || 0;
                                  let wPrev = parseInt(prev.trim().split(' ')[1]) || 0;
                                  return wCurr > wPrev ? curr : prev;
                              });
-                             candidates.push("DOM_IMAGE|" + best.trim().split(' ')[0]);
+                             candidates.push("DOM_IMAGE|" + best.trim().split(' ')[0] + "|0");
                          } else {
-                             candidates.push("DOM_IMAGE|" + target.src);
+                             candidates.push("DOM_IMAGE|" + target.src + "|0");
                          }
                     }
-
                     return [...new Set(candidates)].join(';');
                 })()
             "#;
@@ -328,16 +340,23 @@ impl<'a> InstagramBot<'a> {
                 Err(_) => "".to_string(),
             };
 
-            let items: Vec<&str> = raw_result.split(';').collect();
-            let mut found_new = false;
+            if raw_result.is_empty() {
+                thread::sleep(Duration::from_millis(500));
+                continue;
+            }
 
+            let items: Vec<&str> = raw_result.split(';').collect();
+            let mut mp4_candidates: Vec<(String, usize)> = Vec::new();
+            let mut image_url = String::new();
+            
             for item in items {
-                if item.is_empty() { continue; }
                 let parts: Vec<&str> = item.split('|').collect();
-                if parts.len() < 2 { continue; }
+                if parts.len() < 3 { continue; }
+                let kind = parts[0];
                 let mut url = parts[1].to_string();
-                if url.len() < 10 { continue; }
-                
+                let size: usize = parts[2].parse().unwrap_or(0);
+
+                // Clean URL
                 if url.contains(".mp4") {
                     if let Some(idx) = url.find("&bytestart") { url = url[..idx].to_string(); }
                     if let Some(idx) = url.find("?bytestart") { url = url[..idx].to_string(); }
@@ -345,45 +364,112 @@ impl<'a> InstagramBot<'a> {
 
                 if history.contains(&url) { continue; }
 
-                let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-                let ext = if url.contains(".mp4") { "mp4" } else { "jpg" };
-                let fname = format!("{}_{}.{}", username, timestamp, ext);
+                if kind == "DOM_IMAGE" { image_url = url; } 
+                else if kind == "NET_MP4" { mp4_candidates.push((url, size)); }
+            }
 
-                log_info(&format!("Found {}! Downloading...", ext));
+            let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+            let base_filename = format!("{}_{}", username, timestamp);
 
-                let js_fetch = format!(r#"
-                    (async function() {{
-                        try {{
-                            const response = await fetch("{}", {{ cache: 'force-cache' }});
-                            const blob = await response.blob();
-                            return await new Promise((resolve) => {{
-                                const reader = new FileReader();
-                                reader.onloadend = () => resolve(reader.result);
-                                reader.readAsDataURL(blob);
-                            }});
-                        }} catch (err) {{ return "ERROR"; }}
-                    }})()
-                "#, url);
+            // --- EXECUTION PRIORITY ---
 
-                match self.tab.evaluate(&js_fetch, true) {
-                    Ok(res_fetch) => {
-                        if let Some(data_val) = res_fetch.value {
-                            let data_uri = data_val.as_str().unwrap_or("");
-                            if data_uri.starts_with("data:") {
-                                if let Ok(_) = save_base64_file(data_uri, &fname) {
-                                    history.insert(url);
-                                    found_new = true;
-                                    break; 
-                                }
-                            }
+            // Priority 1: Video + Audio Muxing
+            // We accumulate candidates. If we have > 0 candidates, we assume video logic.
+            if !mp4_candidates.is_empty() {
+                // Sort by size (Largest is Video, Smaller is Audio)
+                mp4_candidates.sort_by(|a, b| b.1.cmp(&a.1));
+                
+                let video_url = mp4_candidates[0].0.clone();
+                let mut audio_url = String::new();
+
+                // Find a smaller file that isn't the video (Audio)
+                for (url, size) in &mp4_candidates {
+                    if *url != video_url && *size > 0 && *size < 800_000 {
+                        audio_url = url.clone();
+                        break;
+                    }
+                }
+
+                // CONVERGENCE LOCK:
+                // If we have video but NO audio, wait up to 4 seconds (8 ticks) for audio to appear
+                if !video_url.is_empty() && audio_url.is_empty() && audio_wait_counter < 8 {
+                    log_info("Found Video, waiting for Audio stream...");
+                    audio_wait_counter += 1;
+                    thread::sleep(Duration::from_millis(500));
+                    continue; 
+                }
+
+                if !video_url.is_empty() {
+                    let v_name = format!("{}_v.mp4", base_filename);
+                    let a_name = format!("{}_audio.mp4", base_filename);
+                    let final_name = format!("{}.mp4", base_filename);
+
+                    let v_ok = self.fetch_and_save(&video_url, &v_name).await.is_ok();
+                    let mut a_ok = false;
+                    
+                    if !audio_url.is_empty() {
+                        a_ok = self.fetch_and_save(&audio_url, &a_name).await.is_ok();
+                    }
+
+                    if v_ok && a_ok {
+                        // Flawless Victory: Mux
+                        if let Ok(_) = mux_video_audio(&v_name, &a_name, &final_name) {
+                            history.insert(video_url);
+                            history.insert(audio_url);
+                            return Ok(true);
                         }
-                    },
-                    Err(_) => {}
+                    } else if v_ok {
+                        // Fallback: Muted Video
+                        log_info("Audio stream unavailable. Saving Video only.");
+                        rename_video_only(&v_name, &final_name)?;
+                        history.insert(video_url);
+                        return Ok(true);
+                    }
                 }
             }
-            if found_new { return Ok(true); }
+
+            // Priority 2: Image
+            // Only if NO video candidates were found
+            if !image_url.is_empty() && mp4_candidates.is_empty() {
+                log_info("Found Image! Downloading...");
+                let fname = format!("{}.jpg", base_filename);
+                if self.fetch_and_save(&image_url, &fname).await.is_ok() {
+                    history.insert(image_url);
+                    return Ok(true);
+                }
+            }
+
             thread::sleep(Duration::from_millis(500));
         }
         Ok(false)
+    }
+
+    async fn fetch_and_save(&self, url: &str, filename: &str) -> Result<()> {
+        let js_fetch = format!(r#"
+            (async function() {{
+                try {{
+                    const response = await fetch("{}", {{ cache: 'force-cache' }});
+                    const blob = await response.blob();
+                    return await new Promise((resolve) => {{
+                        const reader = new FileReader();
+                        reader.onloadend = () => resolve(reader.result);
+                        reader.readAsDataURL(blob);
+                    }});
+                }} catch (err) {{ return "ERROR"; }}
+            }})()
+        "#, url);
+
+        match self.tab.evaluate(&js_fetch, true) {
+            Ok(res) => {
+                if let Some(val) = res.value {
+                    let data = val.as_str().unwrap_or("");
+                    if data.starts_with("data:") {
+                        return save_base64_file(data, filename);
+                    }
+                }
+            },
+            Err(_) => {}
+        }
+        Err(anyhow!("Fetch failed"))
     }
 }
