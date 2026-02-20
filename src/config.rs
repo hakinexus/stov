@@ -1,23 +1,28 @@
-
-pub const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36";
-
-
+// --- BROWSER CONFIGURATION ---
+pub const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36";
 pub const CHROME_PATH: &str = "/data/data/com.termux/files/usr/bin/chromium";
+
+// --- FILE SYSTEM ---
 pub const DOWNLOAD_DIR: &str = "./downloads";
 pub const IMAGES_DIR: &str = "./images";
 pub const PROOF_DIR: &str = "./images/login_proofs";
 pub const ERROR_DIR: &str = "./images/story_errors";
 pub const PROFILES_DIR: &str = "./profiles";
 
-
+// --- LOGIN SELECTORS ---
 pub const USER_CSS: &str = "input[name='username']";
-pub const USER_XPATH_1: &str = "//input[contains(@aria-label, 'username') or contains(@aria-label, 'Mobile')]";
-pub const USER_XPATH_2: &str = "//input[@type='text']";
+pub const USER_XPATH_1: &str = "//input[@name='username']";
+pub const USER_XPATH_2: &str = "//label[contains(text(), 'Phone, username, or email')]/following-sibling::input";
 
 pub const PASS_CSS: &str = "input[name='password']";
-pub const PASS_XPATH: &str = "//input[@type='password']";
+pub const PASS_XPATH: &str = "//input[@name='password']";
 
 pub const SEL_SUBMIT: &str = "button[type='submit']";
+
+// --- NAVIGATION SELECTORS (DESKTOP OPTIMIZED) ---
 pub const SEL_HOME_ICON: &str = "svg[aria-label='Home']"; 
-pub const SEL_STORY_RING: &str = "canvas"; 
+// Expert Note: On desktop, the ring is a canvas inside the header.
+pub const SEL_STORY_RING: &str = "main header canvas"; 
+// Fallback: The profile image itself inside the header
+pub const SEL_PROFILE_IMG: &str = "main header img";
 pub const SEL_AVATAR: &str = "img[alt*='profile picture']";

@@ -30,48 +30,47 @@ pub fn launch_browser() -> Result<Browser> {
     let has_display = env::var("DISPLAY").is_ok();
     
     if has_display {
-        println!(" [DISPLAY DETECTED] Launching in X11 Visual Mode (Streaming)...");
+        println!(" [DISPLAY] Launching in X11 Desktop Visual Mode (1920x1080)...");
     } else {
-        println!(" [NO DISPLAY DETECTED] Launching in Headless Mode (Invisible).");
+        println!(" [HEADLESS] Launching in Invisible Desktop Mode.");
     }
 
-    let mut args_vec = vec![
-        "--no-sandbox",               
-        "--disable-setuid-sandbox",   
-        "--disable-dev-shm-usage",    
-        "--disable-gpu",              
-        "--no-zygote",                
-        "--single-process",           
+    // DESKTOP ARGUMENTS
+    let args_vec = vec![
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--no-zygote",
+        "--single-process",
         "--ignore-certificate-errors",
-        "--window-size=1080,1920", // Force Mobile High-Res
+        // Force Desktop Resolution
+        "--window-size=1920,1080", 
+        "--start-maximized",
+        "--disable-mobile-emulation",
         "--disable-software-rasterizer",
         "--disable-default-apps",
         "--disable-extensions",
         "--disable-sync",
         "--no-first-run",
-        // EXPERT FIX: DISABLE AUTOPLAY POLICY
-        // This allows us to unmute video via JS without clicking
         "--autoplay-policy=no-user-gesture-required",
         "--use-fake-ui-for-media-stream",
         &user_data_arg,
         &ua_arg
     ];
 
-    if has_display {
-        args_vec.push("--force-device-scale-factor=1.0");
-    }
-
     let options = LaunchOptions {
         headless: !has_display, 
         sandbox: false,
         path: Some(termux_path),
-        window_size: Some((1080, 1920)),
+        // Explicit Desktop Size in Options
+        window_size: Some((1920, 1080)), 
         enable_gpu: false,
         args: args_vec.iter().map(|s| OsStr::new(s)).collect(),
         ..Default::default()
     };
 
-    println!("Initializing Termux Chromium Engine...");
+    println!("Initializing Termux Chromium Engine (Desktop Edition)...");
     
     match Browser::new(options) {
         Ok(b) => Ok(b),
