@@ -43,7 +43,6 @@ impl<'a> InstagramBot<'a> {
     }
 
     fn inject_sniffer(&self) {
-        // We keep the sniffer running just in case we need to fallback for Audio streams
         let script = r#"
             if (!window.__sniffer_active) {
                 window.__intercepted_urls = new Array();
@@ -52,8 +51,10 @@ impl<'a> InstagramBot<'a> {
                         if (entry.name.includes('.mp4') || entry.name.includes('.m4a') || (entry.name.includes('.jpg') && entry.name.includes('instagram'))) {
                             window.__intercepted_urls.push({
                                 url: entry.name,
-                                size: entry.transferSize || entry.decodedBodySize || 0
+                                size: entry.transferSize || entry.decodedBodySize || 0,
+                                time: entry.startTime || performance.now()
                             });
+                            // Keep buffer reasonably sized
                             if (window.__intercepted_urls.length > 500) window.__intercepted_urls.shift();
                         }
                     });
@@ -125,7 +126,6 @@ impl<'a> InstagramBot<'a> {
             log_info("Session Login Successful!");
             return Ok(());
         }
-        // Using \x5B and \x5D to bypass markdown eating square brackets
         if let Ok(el) = self.tab.find_element_by_xpath("//button\x5Bcontains(text(), 'Not Now')\x5D") {
              let _ = el.click();
              log_info("Session Login Successful (Popup dismissed).");
@@ -231,15 +231,12 @@ impl<'a> InstagramBot<'a> {
     async fn process_story_batch(&self, username: &str) -> Result<()> {
         self.inject_sniffer();
         
-        // --- SMART DESKTOP CLICK & CONFIRM ---
         let mut transitioned = false;
 
-        // Attempt 1: Click the Ring (Canvas)
         if let Ok(el) = self.tab.find_element(SEL_STORY_RING) { 
             let _ = el.click(); 
         }
 
-        // Wait up to 5s for transition
         for _ in 0..10 {
             if self.tab.get_url().contains("stories") {
                 transitioned = true;
@@ -248,7 +245,6 @@ impl<'a> InstagramBot<'a> {
             thread::sleep(Duration::from_millis(500));
         }
 
-        // Attempt 2: Fallback (Click Profile Image if Canvas missed)
         if !transitioned {
             log_info("Canvas click missed. Trying fallback click on Profile Image...");
             if let Ok(el) = self.tab.find_element(SEL_PROFILE_IMG) {
@@ -268,7 +264,6 @@ impl<'a> InstagramBot<'a> {
             return Ok(()); 
         }
 
-        // --- BATCH DOWNLOAD LOOP ---
         let mut downloaded_history: HashSet<String> = HashSet::new();
         let mut story_count = 0;
         let mut consecutive_errors = 0;
@@ -326,7 +321,6 @@ impl<'a> InstagramBot<'a> {
                         if (!v.paused && v.readyState > 2) { v.pause(); }
                     });
                     
-                    // Button pause logic
                     let svgs = Array.from(document.querySelectorAll('svg'));
                     let pauseBtn = svgs.find(s => s.getAttribute('aria-label') === 'Pause');
                     if (pauseBtn) {
@@ -337,59 +331,81 @@ impl<'a> InstagramBot<'a> {
             "#;
             let _ = self.tab.evaluate(js_freeze, false);
 
-            // 2. VISUAL INTERSECTION CHECK (The God-Level Fix)
+            // 2. GEOSPATIAL GEOMETRY CHECK (God-Level Fix for "Wrong Video")
             let js_identify = r#"
                 (function() {
-                    // This function finds what is PHYSICALLY in the center of the screen
                     let centerX = window.innerWidth / 2;
                     let centerY = window.innerHeight / 2;
-                    let centerEl = document.elementFromPoint(centerX, centerY);
                     
-                    if (!centerEl) return "EMPTY";
+                    let raw_resources = [
+                        ...(window.__intercepted_urls || []), 
+                        ...performance.getEntriesByType('resource')
+                    ];
+                    
+                    let resources = [];
+                    let seen = new Set();
+                    raw_resources.forEach(r => {
+                        let u = r.name || r.url;
+                        if (!seen.has(u)) {
+                            seen.add(u);
+                            resources.push({
+                                url: u,
+                                size: r.transferSize || r.decodedBodySize || r.size || 0,
+                                time: r.startTime || r.responseEnd || performance.now()
+                            });
+                        }
+                    });
+                    // Sort by TIME (Newest first) - critical for catching the 'current' story loading
+                    resources.sort((a, b) => b.time - a.time);
 
-                    // Walk up the tree to find the media container
-                    let mediaContainer = centerEl.closest('div[role="dialog"]') || centerEl.closest('section') || document.body;
-                    
-                    // Search for VIDEO within this container (Highest Priority)
-                    let videos = Array.from(mediaContainer.querySelectorAll('video'));
+                    // --- VIDEO FINDER ---
+                    let allVideos = Array.from(document.querySelectorAll('video'));
                     let bestVideo = null;
                     
-                    videos.forEach(v => {
+                    for (let v of allVideos) {
                         let rect = v.getBoundingClientRect();
-                        // Check if this video actually covers the center point
+                        // 1. MUST contain center point
                         if (centerX >= rect.left && centerX <= rect.right && centerY >= rect.top && centerY <= rect.bottom) {
-                            if (rect.width > 300) { // Must be substantial size
-                                bestVideo = v;
+                            
+                            // 2. HEIGHT CHECK: Stories are tall. Posts are usually squares.
+                            // If video height is > 65% of viewport, it's definitely a Story.
+                            // Feed posts are rarely that tall on desktop view.
+                            if (rect.height > (window.innerHeight * 0.65)) { 
+                                bestVideo = v; 
+                                break; 
                             }
                         }
-                    });
-
-                    if (bestVideo) {
-                        return "DOM_VIDEO|" + bestVideo.src + "|999999";
                     }
 
-                    // Search for IMAGE within this container (Secondary)
-                    let images = Array.from(mediaContainer.querySelectorAll('img'));
-                    let bestImg = null;
-                    
-                    images.forEach(img => {
+                    if (bestVideo) {
+                        let src = bestVideo.src;
+                        if (src.startsWith('blob:')) {
+                            // Blob Detected: Find match in network log
+                            // We look for the NEWEST large video file.
+                            let match = resources.find(r => 
+                                (r.url.includes('.mp4') || r.url.includes('.m4a') || r.url.includes('bytestart')) &&
+                                r.size > 500000 // >500KB to ensure it's not a preview/highlight
+                            );
+                            if (match) return "DOM_VIDEO|" + match.url;
+                        } else {
+                            return "DOM_VIDEO|" + src;
+                        }
+                    }
+
+                    // --- IMAGE FINDER ---
+                    let allImages = Array.from(document.querySelectorAll('img'));
+                    for (let img of allImages) {
                         let rect = img.getBoundingClientRect();
                         if (centerX >= rect.left && centerX <= rect.right && centerY >= rect.top && centerY <= rect.bottom) {
-                            if (rect.width > 300 && rect.height > 400) {
-                                bestImg = img;
+                            // Same height check for images
+                            if (rect.height > (window.innerHeight * 0.65)) {
+                                if (img.srcset) {
+                                    let parts = img.srcset.split(',');
+                                    let best = parts.pop(); 
+                                    return "DOM_IMAGE|" + best.trim().split(' ')[0];
+                                }
+                                return "DOM_IMAGE|" + img.src;
                             }
-                        }
-                    });
-
-                    if (bestImg) {
-                        // Extract highest quality from srcset
-                        if (bestImg.srcset) {
-                             let parts = bestImg.srcset.split(',');
-                             let best = parts.pop(); // Take the last one (usually biggest)
-                             let url = best.trim().split(' ')[0];
-                             return "DOM_IMAGE|" + url + "|0";
-                        } else {
-                             return "DOM_IMAGE|" + bestImg.src + "|0";
                         }
                     }
 
@@ -411,13 +427,11 @@ impl<'a> InstagramBot<'a> {
             let kind = *parts.get(0).unwrap_or(&"");
             let mut url = parts.get(1).unwrap_or(&"").to_string();
             
-            // Cleanup URL
             if url.contains("&bytestart") { 
                 if let Some(idx) = url.find("&bytestart") { url = url.get(..idx).unwrap_or(&url).to_string(); }
             }
 
             if history.contains(&url) || failed_urls.contains(&url) { 
-                // If we found the same video again, it implies the UI hasn't moved yet. Wait.
                 thread::sleep(Duration::from_millis(500));
                 continue; 
             }
@@ -425,35 +439,34 @@ impl<'a> InstagramBot<'a> {
             let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
             let base_filename = format!("{}_{}", username, timestamp);
 
-            // --- DOWNLOAD EXECUTION ---
-
             if kind == "DOM_VIDEO" {
                 let v_name = format!("{}_v.mp4", base_filename);
                 
-                // Fetch the MAIN video (Visuals)
                 if self.fetch_and_save(&url, &v_name).await.is_ok() {
                     
-                    // Attempt to find Audio (Instagram often separates them in blobs)
-                    // We look into the Network Log *only* for the audio track now
-                    let js_find_audio = r#"
-                        (function() {
+                    // Find Audio: Look for newest audio-like resource that is NOT the video we just found
+                    let js_find_audio = format!(r#"
+                        (function() {{
                             let resources = performance.getEntriesByType('resource');
-                            // Find the largest audio file or the largest mp4 that isn't the video we just found
-                            let audios = resources.filter(r => (r.name.includes('.mp4') || r.name.includes('.m4a')) && r.transferSize > 10000);
-                            audios.sort((a,b) => b.transferSize - a.transferSize);
+                            let audios = resources.filter(r => 
+                                (r.name.includes('.mp4') || r.name.includes('.m4a')) && 
+                                r.transferSize > 50000 && 
+                                r.name !== "{}" 
+                            );
+                            audios.sort((a,b) => b.startTime - a.startTime);
                             if (audios.length > 0) return audios[0].name;
                             return "";
-                        })()
-                    "#;
+                        }})()
+                    "#, url);
                     
-                    let audio_url = match self.tab.evaluate(js_find_audio, false) {
+                    let audio_url = match self.tab.evaluate(&js_find_audio, false) {
                         Ok(res) => res.value.unwrap().as_str().unwrap_or("").to_string(),
                         Err(_) => "".to_string(),
                     };
 
                     let final_name = format!("{}.mp4", base_filename);
 
-                    if !audio_url.is_empty() && audio_url != url {
+                    if !audio_url.is_empty() {
                         let a_name = format!("{}_audio.mp4", base_filename);
                         if self.fetch_and_save(&audio_url, &a_name).await.is_ok() {
                             let _ = mux_video_audio(&v_name, &a_name, &final_name);
@@ -463,7 +476,6 @@ impl<'a> InstagramBot<'a> {
                         }
                     }
                     
-                    // Fallback: Just video (sometimes it has audio embedded)
                     log_info("No separate audio stream found. Saving Video.");
                     let _ = rename_video_only(&v_name, &final_name);
                     history.insert(url.clone());

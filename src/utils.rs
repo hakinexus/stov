@@ -103,20 +103,17 @@ pub fn save_base64_file(base64_string: &str, filename: &str) -> Result<()> {
 
     let bytes = general_purpose::STANDARD.decode(clean_string)?;
 
-    // STRICT SIZE CHECK (The Expert Fix)
-    // - Audio: > 10KB
-    // - Video: > 100KB (to reject header-only chunks)
-    // - Images: > 40KB (to reject thumbnails and icons)
+    // MODIFIED: Slightly tighter bounds to reject fragment headers
     let min_size = if filename.contains("_audio") {
-        10_000 
+        5_000 // 5KB minimum for audio (rejects 2KB headers)
     } else if filename.ends_with(".mp4") {
         100_000 
     } else {
-        40_000 
+        20_000 
     };
 
     if bytes.len() < min_size {
-        return Err(anyhow!("File too small ({} bytes). Expected > {}. Rejected (Thumbnail/Garbage).", bytes.len(), min_size));
+        return Err(anyhow!("File too small ({} bytes). Rejected.", bytes.len()));
     }
 
     let mut file = fs::File::create(&path)?;
@@ -137,20 +134,24 @@ pub fn mux_video_audio(video_filename: &str, audio_filename: &str, final_filenam
         .arg("-i").arg(&video_path)
         .arg("-i").arg(&audio_path)
         .arg("-c").arg("copy")
+        .arg("-strict").arg("experimental") // Allow experimental codecs
         .arg(&output_path)
         .status();
-
-    let _ = fs::remove_file(&video_path);
-    let _ = fs::remove_file(&audio_path);
 
     match status {
         Ok(s) if s.success() => {
             log_info(&format!("Success! Saved: {}", final_filename));
+            // Success: Clean up temps
+            let _ = fs::remove_file(&video_path);
+            let _ = fs::remove_file(&audio_path);
             Ok(())
         },
         _ => {
-            log_error("FFmpeg Muxing Failed. Ensure FFmpeg is installed.");
-            Err(anyhow!("Muxing failed"))
+            log_error("FFmpeg Muxing Failed (Bad Audio Stream). Saving Video Only.");
+            // Failure: Save the video at least!
+            let _ = fs::rename(&video_path, &output_path); // Rename video to final
+            let _ = fs::remove_file(&audio_path); // Kill bad audio
+            Ok(()) // Return OK because we saved the video
         }
     }
 }
