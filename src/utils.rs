@@ -133,17 +133,15 @@ pub fn mux_video_audio(video_filename: &str, audio_filename: &str, final_filenam
     
     log_info("Muxing Audio/Video streams...");
 
-    // FFmpeg: Map Video from 0:v:0, Audio from 1:a:0
-    // +faststart for Apple compatibility
     let status = Command::new("ffmpeg")
         .arg("-y")
         .arg("-v").arg("error")
         .arg("-i").arg(&video_path)
         .arg("-i").arg(&audio_path)
-        .arg("-map").arg("0:v:0")
-        .arg("-map").arg("1:a:0")
+        .arg("-map").arg("0:v:0") 
+        .arg("-map").arg("1:a:0") 
         .arg("-c").arg("copy")
-        .arg("-movflags").arg("+faststart")
+        .arg("-movflags").arg("+faststart") 
         .arg(&output_path)
         .status();
 
@@ -157,7 +155,7 @@ pub fn mux_video_audio(video_filename: &str, audio_filename: &str, final_filenam
         _ => {
             log_error("FFmpeg Muxing Failed. Rescuing Raw Video...");
             let _ = fs::remove_file(&output_path); 
-            let _ = normalize_video(video_filename, final_filename); // Fallback
+            let _ = normalize_video(video_filename, final_filename); 
             let _ = fs::remove_file(&audio_path); 
             Ok(()) 
         }
@@ -181,7 +179,7 @@ pub fn normalize_video(temp_filename: &str, final_filename: &str) -> Result<()> 
 
     match status {
         Ok(s) if s.success() => {
-            log_info(&format!("Success! Saved Muted Video: {}", final_filename));
+            log_info(&format!("Success! Saved: {}", final_filename));
             let _ = fs::remove_file(&temp_path);
             Ok(())
         },
