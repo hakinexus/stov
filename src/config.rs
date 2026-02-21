@@ -19,10 +19,7 @@ pub const PASS_XPATH: &str = "//input[@name='password']";
 
 pub const SEL_SUBMIT: &str = "button[type='submit']";
 
-// --- NAVIGATION SELECTORS (DESKTOP OPTIMIZED) ---
+// --- NAVIGATION SELECTORS ---
 pub const SEL_HOME_ICON: &str = "svg[aria-label='Home']"; 
-// Expert Note: On desktop, the ring is a canvas inside the header.
 pub const SEL_STORY_RING: &str = "main header canvas"; 
-// Fallback: The profile image itself inside the header
-pub const SEL_PROFILE_IMG: &str = "main header img";
 pub const SEL_AVATAR: &str = "img[alt*='profile picture']";

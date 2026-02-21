@@ -6,7 +6,7 @@ use rand::Rng;
 use anyhow::{Result, anyhow};
 use std::collections::HashSet; 
 use crate::config::*;
-use crate::utils::{log_info, log_error, save_base64_file, save_screenshot, save_html, save_profile, mux_video_audio, rename_video_only};
+use crate::utils::{log_info, log_error, save_base64_file, save_screenshot, save_html, save_profile, mux_video_audio, normalize_video};
 
 pub struct InstagramBot<'a> {
     _browser: &'a Browser,
@@ -51,11 +51,11 @@ impl<'a> InstagramBot<'a> {
                         if (entry.name.includes('.mp4') || entry.name.includes('.m4a') || (entry.name.includes('.jpg') && entry.name.includes('instagram'))) {
                             window.__intercepted_urls.push({
                                 url: entry.name,
-                                size: entry.transferSize || entry.decodedBodySize || 0,
+                                size: Math.max(entry.transferSize || 0, entry.decodedBodySize || 0),
                                 time: entry.startTime || performance.now()
                             });
-                            // Keep buffer reasonably sized
-                            if (window.__intercepted_urls.length > 500) window.__intercepted_urls.shift();
+                            // Expanded buffer for large story batches
+                            if (window.__intercepted_urls.length > 2000) window.__intercepted_urls.shift();
                         }
                     });
                 });
@@ -126,6 +126,7 @@ impl<'a> InstagramBot<'a> {
             log_info("Session Login Successful!");
             return Ok(());
         }
+        
         if let Ok(el) = self.tab.find_element_by_xpath("//button\x5Bcontains(text(), 'Not Now')\x5D") {
              let _ = el.click();
              log_info("Session Login Successful (Popup dismissed).");
@@ -212,13 +213,21 @@ impl<'a> InstagramBot<'a> {
     pub async fn process_targets(&self, targets: Vec<String>) -> Result<()> {
         for target in targets {
             log_info(&format!("Checking target: {}", target));
-            let url = format!("https://www.instagram.com/{}/", target);
-            if let Err(_) = self.tab.navigate_to(&url) { continue; }
-            thread::sleep(Duration::from_secs(5)); 
+            
+            let profile_url = format!("https://www.instagram.com/{}/", target);
+            if let Err(_) = self.tab.navigate_to(&profile_url) { continue; }
+            thread::sleep(Duration::from_secs(4)); 
 
-            // DESKTOP: Check specifically for the Header Canvas
             if self.tab.find_element(SEL_STORY_RING).is_ok() {
-                log_info("Story found! Transitioning to viewer...");
+                log_info("Story found! Preparing isolated environment...");
+                
+                // PRELOAD PURGE (Only done ONCE at start of batch)
+                let _ = self.tab.evaluate("performance.clearResourceTimings(); window.__intercepted_urls = new Array();", false);
+                
+                let story_url = format!("https://www.instagram.com/stories/{}/", target);
+                let _ = self.tab.navigate_to(&story_url);
+                thread::sleep(Duration::from_secs(4));
+
                 let _ = self.process_story_batch(&target).await;
             } else {
                 log_info("No stories found for this user.");
@@ -233,10 +242,6 @@ impl<'a> InstagramBot<'a> {
         
         let mut transitioned = false;
 
-        if let Ok(el) = self.tab.find_element(SEL_STORY_RING) { 
-            let _ = el.click(); 
-        }
-
         for _ in 0..10 {
             if self.tab.get_url().contains("stories") {
                 transitioned = true;
@@ -246,21 +251,7 @@ impl<'a> InstagramBot<'a> {
         }
 
         if !transitioned {
-            log_info("Canvas click missed. Trying fallback click on Profile Image...");
-            if let Ok(el) = self.tab.find_element(SEL_PROFILE_IMG) {
-                let _ = el.click();
-            }
-            for _ in 0..10 {
-                if self.tab.get_url().contains("stories") {
-                    transitioned = true;
-                    break;
-                }
-                thread::sleep(Duration::from_millis(500));
-            }
-        }
-
-        if !transitioned {
-            log_error("Failed to open Story Viewer. Aspect ratio or Layout mismatch.");
+            log_error("Failed to open Story Viewer.");
             return Ok(()); 
         }
 
@@ -270,38 +261,58 @@ impl<'a> InstagramBot<'a> {
 
         loop {
             let current_url = self.tab.get_url();
-            if !current_url.contains("stories") { log_info("Batch ended (Returned to feed)."); break; }
-            if !current_url.contains(username) { log_info("Batch ended (Moved to different user)."); let _ = self.tab.press_key("Escape"); break; }
+            
+            if !current_url.contains(&format!("stories/{}", username)) { 
+                log_info("Batch ended (Viewer closed automatically)."); 
+                break; 
+            }
 
             match self.download_active_story(username, &mut downloaded_history).await {
                 Ok(true) => {
                     story_count += 1;
                     consecutive_errors = 0;
                     log_info(&format!("Story #{} Saved.", story_count));
-                    log_info("Moving to next...");
-                    let _ = self.tab.press_key("ArrowRight");
-                    thread::sleep(Duration::from_millis(1500));
                 },
                 Ok(false) => {
                     consecutive_errors += 1;
                     log_info("Skipping/Timeout...");
-                    let _ = self.tab.press_key("ArrowRight");
-                    thread::sleep(Duration::from_millis(1500));
                 },
                 Err(e) => {
                     consecutive_errors += 1;
                     log_error(&format!("Error: {}", e));
-                    let _ = self.tab.press_key("ArrowRight");
-                    thread::sleep(Duration::from_millis(1500));
                 }
             }
 
-            if consecutive_errors > 8 {
+            if consecutive_errors > 5 {
                 log_info("Too many errors. Exiting batch.");
-                let _ = self.tab.press_key("Escape");
                 break;
             }
+
+            // DO NOT PURGE LOGS HERE. This was the cause of the late-story timeouts.
+            // We rely on downloaded_history to skip duplicates.
+
+            log_info("Moving to next...");
+            let prev_url = self.tab.get_url();
+            let _ = self.tab.press_key("ArrowRight");
+            
+            let mut transition_success = false;
+            for _ in 0..20 {
+                thread::sleep(Duration::from_millis(300));
+                let new_url = self.tab.get_url();
+                if new_url != prev_url {
+                    transition_success = true;
+                    break;
+                }
+            }
+            
+            if !transition_success {
+                log_info("End of stories reached or transition timed out.");
+                break;
+            }
+            
+            thread::sleep(Duration::from_millis(1500));
         }
+        
         log_info(&format!("Batch complete. Total saved: {}", story_count));
         Ok(())
     }
@@ -309,16 +320,31 @@ impl<'a> InstagramBot<'a> {
     async fn download_active_story(&self, username: &str, history: &mut HashSet<String>) -> Result<bool> {
         let mut failed_urls: HashSet<String> = HashSet::new();
 
-        for _attempt in 1..=25 { 
+        // INCREASED TIMEOUT: 60 iterations * 500ms = 30 seconds
+        for _attempt in 1..=60 { 
             
-            // 1. FORCE AUDIO/VIDEO UNMUTE AND FREEZE
+            // 1. AUTO-DISMISS & FREEZE
             let js_freeze = r#"
                 (function() {
+                    let allElements = Array.from(document.querySelectorAll('div, button, span, a'));
+                    allElements.forEach(el => {
+                        let txt = (el.innerText || el.textContent || "").trim().toLowerCase();
+                        if (txt === "view story" || txt === "ok" || txt === "got it" || txt.includes("can see")) {
+                            if (typeof el.click === 'function') el.click();
+                        }
+                    });
+
+                    // Force play if stalled (readyState < 2) to trigger download
                     let videos = document.querySelectorAll('video');
                     videos.forEach(v => {
-                        v.muted = false;
-                        v.volume = 1.0;
-                        if (!v.paused && v.readyState > 2) { v.pause(); }
+                        if (v.readyState < 2) { 
+                            v.play().catch(e => {}); 
+                        } else {
+                            v.muted = false;
+                            v.volume = 1.0;
+                            // Only pause if it has buffered enough data
+                            if (!v.paused && v.buffered.length > 0) { v.pause(); }
+                        }
                     });
                     
                     let svgs = Array.from(document.querySelectorAll('svg'));
@@ -331,90 +357,106 @@ impl<'a> InstagramBot<'a> {
             "#;
             let _ = self.tab.evaluate(js_freeze, false);
 
-            // 2. GEOSPATIAL GEOMETRY CHECK (God-Level Fix for "Wrong Video")
-            let js_identify = r#"
-                (function() {
+            let history_json = serde_json::to_string(&history).unwrap_or_else(|_| "[]".to_string());
+
+            // 2. THE PERSISTENT FILTER ENGINE (Checks full history without purging)
+            let js_identify = format!(r#"
+                (function() {{
+                    function getCleanUrl(urlStr) {{
+                        try {{
+                            let u = new URL(urlStr);
+                            u.searchParams.delete('bytestart');
+                            u.searchParams.delete('bytestop');
+                            return u.toString();
+                        }} catch(e) {{ return urlStr; }}
+                    }}
+
+                    let downloaded = new Set({});
                     let centerX = window.innerWidth / 2;
                     let centerY = window.innerHeight / 2;
                     
-                    let raw_resources = [
-                        ...(window.__intercepted_urls || []), 
-                        ...performance.getEntriesByType('resource')
-                    ];
+                    // MERGE BUFFERS: Sniffer + Browser Resource Timing
+                    let raw_resources = new Array();
+                    if (window.__intercepted_urls) {{
+                        window.__intercepted_urls.forEach(u => raw_resources.push(u));
+                    }}
+                    let perf = performance.getEntriesByType('resource');
+                    perf.forEach(p => raw_resources.push(p));
                     
-                    let resources = [];
+                    let resources = new Array();
                     let seen = new Set();
-                    raw_resources.forEach(r => {
+                    raw_resources.forEach(r => {{
                         let u = r.name || r.url;
-                        if (!seen.has(u)) {
+                        if (!seen.has(u)) {{
                             seen.add(u);
-                            resources.push({
-                                url: u,
-                                size: r.transferSize || r.decodedBodySize || r.size || 0,
-                                time: r.startTime || r.responseEnd || performance.now()
-                            });
-                        }
-                    });
-                    // Sort by TIME (Newest first) - critical for catching the 'current' story loading
-                    resources.sort((a, b) => b.time - a.time);
+                            let clean = getCleanUrl(u);
+                            if (!downloaded.has(clean)) {{
+                                resources.push({{
+                                    url: u,
+                                    cleanUrl: clean,
+                                    size: Math.max(r.transferSize || 0, r.decodedBodySize || 0, r.size || 0),
+                                    time: r.startTime || r.responseEnd || performance.now()
+                                }});
+                            }}
+                        }}
+                    }});
+                    
+                    // Sort by TIME (Newest First)
+                    resources.sort((a,b) => b.time - a.time);
 
-                    // --- VIDEO FINDER ---
                     let allVideos = Array.from(document.querySelectorAll('video'));
                     let bestVideo = null;
                     
-                    for (let v of allVideos) {
+                    for (let v of allVideos) {{
                         let rect = v.getBoundingClientRect();
-                        // 1. MUST contain center point
-                        if (centerX >= rect.left && centerX <= rect.right && centerY >= rect.top && centerY <= rect.bottom) {
-                            
-                            // 2. HEIGHT CHECK: Stories are tall. Posts are usually squares.
-                            // If video height is > 65% of viewport, it's definitely a Story.
-                            // Feed posts are rarely that tall on desktop view.
-                            if (rect.height > (window.innerHeight * 0.65)) { 
-                                bestVideo = v; 
-                                break; 
-                            }
-                        }
-                    }
+                        if (centerX >= rect.left && centerX <= rect.right && centerY >= rect.top && centerY <= rect.bottom) {{
+                            bestVideo = v; break; 
+                        }}
+                    }}
 
-                    if (bestVideo) {
+                    if (bestVideo) {{
                         let src = bestVideo.src;
-                        if (src.startsWith('blob:')) {
-                            // Blob Detected: Find match in network log
-                            // We look for the NEWEST large video file.
-                            let match = resources.find(r => 
-                                (r.url.includes('.mp4') || r.url.includes('.m4a') || r.url.includes('bytestart')) &&
-                                r.size > 500000 // >500KB to ensure it's not a preview/highlight
-                            );
-                            if (match) return "DOM_VIDEO|" + match.url;
-                        } else {
-                            return "DOM_VIDEO|" + src;
-                        }
-                    }
+                        if (!src) {{
+                            let srcTag = bestVideo.querySelector('source');
+                            if (srcTag) src = srcTag.src;
+                        }}
+                        
+                        if (src && src.startsWith('blob:')) {{
+                            // THE FIREWALL: Must NOT contain audio tags.
+                            let vids = resources.filter(r => {{
+                                let uLow = r.url.toLowerCase();
+                                let isAudio = uLow.includes('mime=audio') || uLow.includes('audio%2f') || uLow.includes('.m4a');
+                                let isVideo = uLow.includes('.mp4') || uLow.includes('mime=video') || uLow.includes('bytestart');
+                                return isVideo && !isAudio && r.size > 500000;
+                            }});
+                            
+                            if (vids.length > 0) return "DOM_VIDEO|" + vids[0].cleanUrl;
+                        }} else if (src) {{
+                            return "DOM_VIDEO|" + getCleanUrl(src);
+                        }}
+                    }}
 
-                    // --- IMAGE FINDER ---
                     let allImages = Array.from(document.querySelectorAll('img'));
-                    for (let img of allImages) {
+                    for (let img of allImages) {{
                         let rect = img.getBoundingClientRect();
-                        if (centerX >= rect.left && centerX <= rect.right && centerY >= rect.top && centerY <= rect.bottom) {
-                            // Same height check for images
-                            if (rect.height > (window.innerHeight * 0.65)) {
-                                if (img.srcset) {
+                        if (centerX >= rect.left && centerX <= rect.right && centerY >= rect.top && centerY <= rect.bottom) {{
+                            if (rect.width > 200) {{
+                                if (img.srcset) {{
                                     let parts = img.srcset.split(',');
                                     let best = parts.pop(); 
-                                    return "DOM_IMAGE|" + best.trim().split(' ')[0];
-                                }
-                                return "DOM_IMAGE|" + img.src;
-                            }
-                        }
-                    }
+                                    return "DOM_IMAGE|" + getCleanUrl(best.trim().split(' ').shift());
+                                }}
+                                return "DOM_IMAGE|" + getCleanUrl(img.src);
+                            }}
+                        }}
+                    }}
 
                     return "EMPTY";
-                })()
-            "#;
+                }})()
+            "#, history_json);
 
-            let raw_result = match self.tab.evaluate(js_identify, false) {
-                Ok(res) => res.value.unwrap().as_str().unwrap_or("").to_string(),
+            let raw_result = match self.tab.evaluate(&js_identify, false) {
+                Ok(res) => res.value.and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_default(),
                 Err(_) => "".to_string(),
             };
 
@@ -425,13 +467,9 @@ impl<'a> InstagramBot<'a> {
 
             let parts: Vec<&str> = raw_result.split('|').collect();
             let kind = *parts.get(0).unwrap_or(&"");
-            let mut url = parts.get(1).unwrap_or(&"").to_string();
-            
-            if url.contains("&bytestart") { 
-                if let Some(idx) = url.find("&bytestart") { url = url.get(..idx).unwrap_or(&url).to_string(); }
-            }
+            let url = parts.get(1).unwrap_or(&"").to_string();
 
-            if history.contains(&url) || failed_urls.contains(&url) { 
+            if failed_urls.contains(&url) { 
                 thread::sleep(Duration::from_millis(500));
                 continue; 
             }
@@ -439,34 +477,48 @@ impl<'a> InstagramBot<'a> {
             let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
             let base_filename = format!("{}_{}", username, timestamp);
 
+            // 3. EXECUTION
             if kind == "DOM_VIDEO" {
                 let v_name = format!("{}_v.mp4", base_filename);
                 
                 if self.fetch_and_save(&url, &v_name).await.is_ok() {
                     
-                    // Find Audio: Look for newest audio-like resource that is NOT the video we just found
+                    // Audio Finder: Relaxed constraints to find *any* valid audio track for this video
                     let js_find_audio = format!(r#"
                         (function() {{
                             let resources = performance.getEntriesByType('resource');
-                            let audios = resources.filter(r => 
-                                (r.name.includes('.mp4') || r.name.includes('.m4a')) && 
-                                r.transferSize > 50000 && 
-                                r.name !== "{}" 
-                            );
-                            audios.sort((a,b) => b.startTime - a.startTime);
-                            if (audios.length > 0) return audios[0].name;
+                            let audios = new Array();
+                            resources.forEach(r => {{
+                                let u = r.name || r.url;
+                                let uLow = u.toLowerCase();
+                                if ((uLow.includes('mime=audio') || uLow.includes('audio%2f') || uLow.includes('.m4a')) && r.transferSize > 5000) {{
+                                    audios.push({{url: u, time: r.startTime}});
+                                }}
+                            }});
+                            // Sort by time descending (newest first)
+                            audios.sort((a,b) => b.time - a.time);
+                            
+                            if (audios.length > 0) {{
+                                let best = audios.shift();
+                                try {{
+                                    let uObj = new URL(best.url);
+                                    uObj.searchParams.delete('bytestart');
+                                    uObj.searchParams.delete('bytestop');
+                                    return uObj.toString();
+                                }} catch(e) {{ return best.url; }}
+                            }}
                             return "";
                         }})()
-                    "#, url);
+                    "#);
                     
                     let audio_url = match self.tab.evaluate(&js_find_audio, false) {
-                        Ok(res) => res.value.unwrap().as_str().unwrap_or("").to_string(),
+                        Ok(res) => res.value.and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_default(),
                         Err(_) => "".to_string(),
                     };
 
                     let final_name = format!("{}.mp4", base_filename);
 
-                    if !audio_url.is_empty() {
+                    if !audio_url.is_empty() && audio_url != url {
                         let a_name = format!("{}_audio.mp4", base_filename);
                         if self.fetch_and_save(&audio_url, &a_name).await.is_ok() {
                             let _ = mux_video_audio(&v_name, &a_name, &final_name);
@@ -476,8 +528,8 @@ impl<'a> InstagramBot<'a> {
                         }
                     }
                     
-                    log_info("No separate audio stream found. Saving Video.");
-                    let _ = rename_video_only(&v_name, &final_name);
+                    log_info("No separate audio stream found. Normalizing base video.");
+                    let _ = normalize_video(&v_name, &final_name);
                     history.insert(url.clone());
                     return Ok(true);
 
@@ -503,7 +555,7 @@ impl<'a> InstagramBot<'a> {
         let js_fetch = format!(r#"
             (async function() {{
                 try {{
-                    const response = await fetch("{}", {{ credentials: 'omit' }});
+                    const response = await fetch("{}", {{ credentials: 'omit', cache: 'force-cache' }});
                     if (!response.ok) return "ERROR_HTTP_" + response.status;
                     const blob = await response.blob();
                     return await new Promise((resolve) => {{

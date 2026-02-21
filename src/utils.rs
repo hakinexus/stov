@@ -16,7 +16,13 @@ pub struct UserProfile {
 }
 
 pub fn setup_env() {
-    let paths = vec![DOWNLOAD_DIR, IMAGES_DIR, PROOF_DIR, ERROR_DIR, PROFILES_DIR];
+    let mut paths = Vec::new();
+    paths.push(DOWNLOAD_DIR);
+    paths.push(IMAGES_DIR);
+    paths.push(PROOF_DIR);
+    paths.push(ERROR_DIR);
+    paths.push(PROFILES_DIR);
+    
     for p in paths {
         let path = Path::new(p);
         if !path.exists() { let _ = fs::create_dir_all(path); }
@@ -103,13 +109,12 @@ pub fn save_base64_file(base64_string: &str, filename: &str) -> Result<()> {
 
     let bytes = general_purpose::STANDARD.decode(clean_string)?;
 
-    // MODIFIED: Slightly tighter bounds to reject fragment headers
     let min_size = if filename.contains("_audio") {
-        5_000 // 5KB minimum for audio (rejects 2KB headers)
+        2_000 
     } else if filename.ends_with(".mp4") {
-        100_000 
+        10_000 
     } else {
-        20_000 
+        5_000 
     };
 
     if bytes.len() < min_size {
@@ -128,43 +133,62 @@ pub fn mux_video_audio(video_filename: &str, audio_filename: &str, final_filenam
     
     log_info("Muxing Audio/Video streams...");
 
+    // FFmpeg: Map Video from 0:v:0, Audio from 1:a:0
+    // +faststart for Apple compatibility
     let status = Command::new("ffmpeg")
         .arg("-y")
         .arg("-v").arg("error")
         .arg("-i").arg(&video_path)
         .arg("-i").arg(&audio_path)
+        .arg("-map").arg("0:v:0")
+        .arg("-map").arg("1:a:0")
         .arg("-c").arg("copy")
-        .arg("-strict").arg("experimental") // Allow experimental codecs
+        .arg("-movflags").arg("+faststart")
         .arg(&output_path)
         .status();
 
     match status {
         Ok(s) if s.success() => {
             log_info(&format!("Success! Saved: {}", final_filename));
-            // Success: Clean up temps
             let _ = fs::remove_file(&video_path);
             let _ = fs::remove_file(&audio_path);
             Ok(())
         },
         _ => {
-            log_error("FFmpeg Muxing Failed (Bad Audio Stream). Saving Video Only.");
-            // Failure: Save the video at least!
-            let _ = fs::rename(&video_path, &output_path); // Rename video to final
-            let _ = fs::remove_file(&audio_path); // Kill bad audio
-            Ok(()) // Return OK because we saved the video
+            log_error("FFmpeg Muxing Failed. Rescuing Raw Video...");
+            let _ = fs::remove_file(&output_path); 
+            let _ = normalize_video(video_filename, final_filename); // Fallback
+            let _ = fs::remove_file(&audio_path); 
+            Ok(()) 
         }
     }
 }
 
-pub fn rename_video_only(temp_filename: &str, final_filename: &str) -> Result<()> {
-    let source = format!("{}/{}", DOWNLOAD_DIR, temp_filename);
-    let dest = format!("{}/{}", DOWNLOAD_DIR, final_filename);
+pub fn normalize_video(temp_filename: &str, final_filename: &str) -> Result<()> {
+    let temp_path = format!("{}/{}", DOWNLOAD_DIR, temp_filename);
+    let final_path = format!("{}/{}", DOWNLOAD_DIR, final_filename);
     
-    if Path::new(&source).exists() {
-        fs::rename(source, dest)?;
-        log_info(&format!("Saved Muted Video: {}", final_filename));
-        Ok(())
-    } else {
-        Err(anyhow!("Source file not found"))
+    log_info("Normalizing video codec...");
+
+    let status = Command::new("ffmpeg")
+        .arg("-y")
+        .arg("-v").arg("error")
+        .arg("-i").arg(&temp_path)
+        .arg("-c").arg("copy")
+        .arg("-movflags").arg("+faststart")
+        .arg(&final_path)
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            log_info(&format!("Success! Saved Muted Video: {}", final_filename));
+            let _ = fs::remove_file(&temp_path);
+            Ok(())
+        },
+        _ => {
+            log_error("Normalization Failed. Saving raw file.");
+            let _ = fs::rename(&temp_path, &final_path);
+            Ok(())
+        }
     }
 }
