@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STOV | Observation Gallery</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+
+    <main class="glass-container">
+        <header class="glass-header">
+            <div class="header-content">
+                <h1>STOV <span class="highlight">Gallery</span></h1>
+                <p>Live DOM-First Extraction Viewer</p>
+            </div>
+            <div class="controls">
+                <button id="refreshBtn" class="liquid-btn">
+                    <span>Sync Live</span>
+                    <div class="liquid"></div>
+                </button>
+                <div class="status-indicator">
+                    <span class="dot pulse"></span> Live Monitoring
+                </div>
+            </div>
+        </header>
+
+        <section id="galleryGrid" class="masonry-grid">
+            </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
+
