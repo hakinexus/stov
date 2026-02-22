@@ -6,7 +6,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const searchInput = document.getElementById('searchInput');
     const filterBtns = document.querySelectorAll('.filter-btn');
     const connectionStatus = document.getElementById('connectionStatus');
-    
+    const headerToggleBtn = document.getElementById('headerToggleBtn');
+    const glassHeader = document.querySelector('.glass-header');
+
+    if (headerToggleBtn && glassHeader) {
+        headerToggleBtn.addEventListener('click', () => {
+            glassHeader.classList.toggle('collapsed');
+        });
+    }
+
     // Lightbox
     const lightbox = document.getElementById('lightbox');
     const lightboxContent = document.getElementById('lightboxContent');
@@ -30,7 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let visibleMedia = [];      // Array of currently filtered media
     let knownFiles = new Map(); // filename -> DOM Element
     let selectedFiles = new Set();
-    
+
     let currentFilter = 'all';
     let searchQuery = '';
     let isSelectionMode = false;
@@ -59,7 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const icon = type === 'error' ? '!' : '✓';
         toast.innerHTML = `<b style="font-size:1.2em">${icon}</b> <span>${message}</span>`;
         container.appendChild(toast);
-        void toast.offsetWidth; 
+        void toast.offsetWidth;
         toast.classList.add('show');
         setTimeout(() => {
             toast.classList.remove('show');
@@ -69,7 +77,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const videoObserver = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
-            if (entry.isIntersecting) entry.target.play().catch(()=>{});
+            if (entry.isIntersecting) entry.target.play().catch(() => { });
             else entry.target.pause();
         });
     }, { threshold: 0.5 });
@@ -82,7 +90,7 @@ document.addEventListener('DOMContentLoaded', () => {
             statCount.innerText = `${data.count} files`;
             statSize.innerText = data.size;
             statTargets.innerText = `${data.targets} targets`;
-        } catch (e) {}
+        } catch (e) { }
     }
 
     async function syncGallery(silent = false) {
@@ -92,7 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
             allMedia = files;
 
             const serverFilenames = new Set(files.map(f => f.filename));
-            
+
             // Remove deleted items
             for (const [filename, card] of knownFiles.entries()) {
                 if (!serverFilenames.has(filename)) {
@@ -128,7 +136,7 @@ document.addEventListener('DOMContentLoaded', () => {
         evtSource.onopen = () => {
             connectionStatus.classList.remove('offline');
             connectionStatus.classList.add('pulse');
-            syncGallery(true); 
+            syncGallery(true);
         };
         evtSource.onerror = () => {
             connectionStatus.classList.add('offline');
@@ -144,7 +152,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const card = document.createElement('div');
         card.className = 'media-card';
         card.dataset.id = file.id;
-        
+
         // Add select overlay
         const overlay = document.createElement('div');
         overlay.className = 'select-overlay';
@@ -213,9 +221,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     searchInput.addEventListener('input', (e) => { searchQuery = e.target.value.toLowerCase().trim(); applyFilters(); });
     filterBtns.forEach(btn => {
-        if(btn.id === 'selectModeBtn') return;
+        if (btn.id === 'selectModeBtn') return;
         btn.addEventListener('click', (e) => {
-            filterBtns.forEach(b => { if(b.id !== 'selectModeBtn') b.classList.remove('active')});
+            filterBtns.forEach(b => { if (b.id !== 'selectModeBtn') b.classList.remove('active') });
             e.target.classList.add('active');
             currentFilter = e.target.dataset.filter;
             applyFilters();
@@ -227,7 +235,7 @@ document.addEventListener('DOMContentLoaded', () => {
         isSelectionMode = forceState !== null ? forceState : !isSelectionMode;
         document.body.classList.toggle('selecting', isSelectionMode);
         selectModeBtn.classList.toggle('active', isSelectionMode);
-        
+
         if (!isSelectionMode) {
             selectedFiles.clear();
             knownFiles.forEach(card => card.classList.remove('selected'));
@@ -257,19 +265,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     selectModeBtn.addEventListener('click', () => toggleSelectMode());
     document.getElementById('bulkCancelBtn').addEventListener('click', () => toggleSelectMode(false));
-    
+
     document.getElementById('bulkSelectAllBtn').addEventListener('click', () => {
         visibleMedia.forEach(f => {
             selectedFiles.add(f.filename);
             const card = knownFiles.get(f.filename);
-            if(card) card.classList.add('selected');
+            if (card) card.classList.add('selected');
         });
         updateBulkUI();
     });
 
     document.getElementById('bulkDeleteBtn').addEventListener('click', async () => {
         if (!confirm(`Permanently delete ${selectedFiles.size} selected items?`)) return;
-        
+
         try {
             const res = await fetch('/api/files/bulk-delete', {
                 method: 'POST',
@@ -290,7 +298,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (index < 0 || index >= visibleMedia.length) return;
         currentLightboxIndex = index;
         const file = visibleMedia[index];
-        
+
         lightboxContent.innerHTML = '';
         lightboxMeta.innerHTML = `<span style="color:var(--accent)">@${file.username}</span> <span class="meta-date">${file.dateString}</span> <span class="meta-size">${file.size}</span>`;
         btnLbDownload.href = file.url;
@@ -351,7 +359,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btnLbDelete.addEventListener('click', async () => {
         if (currentLightboxIndex === -1) return;
         const file = visibleMedia[currentLightboxIndex];
-        
+
         if (!confirm(`Delete this file?\nTarget: @${file.username}`)) return;
 
         try {
@@ -362,7 +370,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (visibleMedia.length > 1) {
                     const nextIndex = currentLightboxIndex >= visibleMedia.length - 1 ? currentLightboxIndex - 1 : currentLightboxIndex;
                     // Note: visibleMedia array will update briefly after SSE fires, so we close to avoid desync, or we wait.
-                    closeLightbox(); 
+                    closeLightbox();
                 } else {
                     closeLightbox();
                 }
