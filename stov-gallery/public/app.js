@@ -292,7 +292,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const file = visibleMedia[index];
         
         lightboxContent.innerHTML = '';
-        lightboxMeta.innerHTML = `<span style="color:var(--accent)">@${file.username}</span> <span style="opacity:0.6; font-size:0.9em; margin-left:8px;">${file.dateString}</span> <span style="opacity:0.6; font-size:0.8em; margin-left:8px; border:1px solid rgba(255,255,255,0.2); padding:2px 6px; border-radius:10px;">${file.size}</span>`;
+        lightboxMeta.innerHTML = `<span style="color:var(--accent)">@${file.username}</span> <span class="meta-date">${file.dateString}</span> <span class="meta-size">${file.size}</span>`;
         btnLbDownload.href = file.url;
 
         if (file.type === 'video') {
