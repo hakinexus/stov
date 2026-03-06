@@ -1,7 +1,7 @@
 <!--start-->
 <div align="center">
 
-# STOV
+# STOV CURRENTLY NOT FUNCTIONABLE AS EXPECTED
 
 ![Rust](https://img.shields.io/badge/Language-Rust-000000?style=for-the-badge&logo=rust&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Termux_|_Linux-000000?style=for-the-badge&logo=linux&logoColor=white)
