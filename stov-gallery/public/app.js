@@ -43,6 +43,37 @@ document.addEventListener('DOMContentLoaded', () => {
     let searchQuery = '';
     let isSelectionMode = false;
     let currentLightboxIndex = -1;
+    let scrollLockState = null;
+
+    function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
+    }
+
+    function lockBodyScroll() {
+        if (scrollLockState) return;
+        scrollLockState = {
+            scrollY: window.scrollY,
+            bodyOverflow: document.body.style.overflow,
+            bodyPosition: document.body.style.position,
+            bodyTop: document.body.style.top,
+            bodyWidth: document.body.style.width,
+        };
+        document.body.style.position = 'fixed';
+        document.body.style.top = `-${scrollLockState.scrollY}px`;
+        document.body.style.width = '100%';
+        document.body.style.overflow = 'hidden';
+    }
+
+    function unlockBodyScroll() {
+        if (!scrollLockState) return;
+        const state = scrollLockState;
+        scrollLockState = null;
+        document.body.style.overflow = state.bodyOverflow;
+        document.body.style.position = state.bodyPosition;
+        document.body.style.top = state.bodyTop;
+        document.body.style.width = state.bodyWidth;
+        window.scrollTo(0, state.scrollY);
+    }
 
     // --- Init Theme & Mouse Tracker ---
     const savedTheme = localStorage.getItem('stov_theme') || 'dark';
@@ -130,9 +161,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- SSE Connection (Real-Time Push) ---
     function connectSSE() {
         const evtSource = new EventSource('/api/stream');
-        evtSource.onmessage = (e) => {
-            if (e.data === 'update') syncGallery(false);
-        };
+        const handleUpdate = () => syncGallery(false);
+        evtSource.onmessage = handleUpdate;
+        evtSource.addEventListener('update', handleUpdate);
         evtSource.onopen = () => {
             connectionStatus.classList.remove('offline');
             connectionStatus.classList.add('pulse');
@@ -175,7 +206,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const meta = document.createElement('div');
         meta.className = 'card-meta';
-        meta.innerHTML = `<div class="meta-left"><span class="username">@${file.username}</span><span class="timestamp">${file.dateString}</span></div><span class="size-badge">${file.size}</span>`;
+        const status = file.status && file.status !== 'complete'
+            ? `<span class="status-badge">${escapeHtml(file.status)}</span>`
+            : '';
+        meta.innerHTML = `<div class="meta-left"><span class="username">@${escapeHtml(file.username)}</span><span class="timestamp">${escapeHtml(file.dateString)}</span></div><span class="size-badge">${escapeHtml(file.size)}${status}</span>`;
 
         card.appendChild(wrapper);
         card.appendChild(meta);
@@ -300,7 +334,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const file = visibleMedia[index];
 
         lightboxContent.innerHTML = '';
-        lightboxMeta.innerHTML = `<span style="color:var(--accent)">@${file.username}</span> <span class="meta-date">${file.dateString}</span> <span class="meta-size">${file.size}</span>`;
+        const status = file.status && file.status !== 'complete' ? ` <span class="status-badge">${escapeHtml(file.status)}</span>` : '';
+        lightboxMeta.innerHTML = `<span style="color:var(--accent)">@${escapeHtml(file.username)}</span> <span class="meta-date">${escapeHtml(file.dateString)}</span> <span class="meta-size">${escapeHtml(file.size)}</span>${status}`;
         btnLbDownload.href = file.url;
 
         if (file.type === 'video') {
@@ -322,18 +357,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (index !== -1) {
             renderLightboxMedia(index);
             lightbox.classList.add('active');
-            document.body.style.overflow = 'hidden';
+            lockBodyScroll();
         }
     }
 
     function closeLightbox() {
         lightbox.classList.remove('active');
-        document.body.style.overflow = 'auto';
+        unlockBodyScroll();
         setTimeout(() => { lightboxContent.innerHTML = ''; currentLightboxIndex = -1; }, 300);
     }
 
     btnLbClose.addEventListener('click', closeLightbox);
-    lightbox.addEventListener('click', (e) => { if (e.target === lightbox || e.target === lightboxContent) closeLightbox(); });
+    lightbox.addEventListener('click', (e) => { if (e.target === lightbox) closeLightbox(); });
+    window.addEventListener('pagehide', closeLightbox);
 
     // Lightbox Controls
     btnLbPrev.addEventListener('click', () => renderLightboxMedia(currentLightboxIndex - 1));

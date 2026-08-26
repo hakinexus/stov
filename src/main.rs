@@ -1,121 +1,121 @@
-mod config;
 mod browser;
+mod config;
 mod instagram;
 mod utils;
 
 use std::io::{self, Write};
-use utils::{setup_env, log_info, log_error, clear_terminal, list_profiles, load_profile_session};
+
+use colored::*;
 use instagram::InstagramBot;
-use browser::launch_browser;
-use colored::*; 
+use utils::{clear_terminal, list_profiles, load_profile_session, log_error, log_info, setup_env};
+
+fn read_line(prompt: &str) -> String {
+    print!("{} ", prompt.yellow());
+    let _ = io::stdout().flush();
+    let mut value = String::new();
+    if io::stdin().read_line(&mut value).is_err() {
+        return String::new();
+    }
+    value.trim().to_string()
+}
 
 #[tokio::main]
 async fn main() {
-    println!("Build Complete. Press {} to launch STOV...", "ENTER".yellow().bold());
-    let _ = io::stdin().read_line(&mut String::new());
-
     clear_terminal();
     setup_env();
 
     println!("{}", "======================================".cyan().bold());
-    println!("{}", "       STOV - TERMUX EDITION          ".cyan().bold());
-    println!("{}", "   State of the Art Observation Tool  ".white().italic());
+    println!("{}", "       STOV - STORY DOWNLOADER        ".cyan().bold());
+    println!(
+        "{}",
+        "   Reliable capture and media archive  ".white().italic()
+    );
     println!("{}", "======================================".cyan().bold());
-    println!("");
-
-    let mut username = String::new();
-    let mut password = String::new();
-    let mut use_saved_session = false;
-    let mut saved_session_id = String::new();
+    println!();
 
     let profiles = list_profiles().unwrap_or_default();
-    
+    let mut username = String::new();
+    let mut password = String::new();
+    let mut session_id = None;
+
     if !profiles.is_empty() {
-        println!("Saved Profiles Found:");
-        println!("1. Login with New Account");
-        println!("2. Use Saved Account");
-        print!("\nSelect Option (1/2): ");
-        io::stdout().flush().unwrap();
-        
-        let mut choice = String::new();
-        io::stdin().read_line(&mut choice).unwrap();
-        
-        if choice.trim() == "2" {
-            println!("\nSelect Profile:");
-            for (i, prof) in profiles.iter().enumerate() {
-                println!("{}. {}", i + 1, prof);
+        println!("Saved profiles found:");
+        println!("1. Log in with a new account");
+        println!("2. Use a saved account");
+        if read_line("Select option (1/2):") == "2" {
+            for (index, profile) in profiles.iter().enumerate() {
+                println!("{}. {}", index + 1, profile);
             }
-            print!("Enter Number: ");
-            io::stdout().flush().unwrap();
-            
-            let mut prof_choice = String::new();
-            io::stdin().read_line(&mut prof_choice).unwrap();
-            
-            if let Ok(idx) = prof_choice.trim().parse::<usize>() {
-                if idx > 0 && idx <= profiles.len() {
-                    let selected_user = &profiles[idx - 1];
-                    if let Ok(sid) = load_profile_session(selected_user) {
-                        log_info(&format!("Loaded session for {}", selected_user));
-                        saved_session_id = sid;
-                        use_saved_session = true;
-                    } else {
-                        log_error("Failed to load session. Switching to manual login.");
+            if let Ok(index) = read_line("Select profile number:").parse::<usize>() {
+                if let Some(profile) = profiles.get(index.saturating_sub(1)) {
+                    match load_profile_session(profile) {
+                        Ok(value) => {
+                            username = profile.clone();
+                            session_id = Some(value);
+                        }
+                        Err(error) => {
+                            log_error(&format!("Could not load saved profile: {}", error))
+                        }
                     }
                 }
             }
         }
     }
 
-    if !use_saved_session {
-        print!("{} ", "Your Username:".yellow());
-        io::stdout().flush().unwrap();
-        io::stdin().read_line(&mut username).unwrap();
-
-        print!("{} ", "Your Password:".yellow());
-        io::stdout().flush().unwrap();
-        io::stdin().read_line(&mut password).unwrap();
-    }
-
-    let mut targets_input = String::new();
-    print!("{} ", "Targets (e.g. user1,user2):".yellow());
-    io::stdout().flush().unwrap();
-    io::stdin().read_line(&mut targets_input).unwrap();
-
-    let targets: Vec<String> = targets_input
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    println!(""); 
-    
-    match launch_browser() {
-        Ok(browser) => {
-            match InstagramBot::new(&browser) {
-                Ok(bot) => {
-                    let login_result = if use_saved_session {
-                        bot.login_with_session(&saved_session_id)
-                    } else {
-                        bot.login(username.trim(), password.trim())
-                    };
-
-                    if let Err(e) = login_result {
-                        log_error(&format!("Login Critical Error: {}", e));
-                        return;
-                    }
-
-                    if let Err(e) = bot.process_targets(targets).await {
-                        log_error(&format!("Scraping Error: {}", e));
-                    }
-                },
-                Err(e) => log_error(&format!("Tab Creation Failed: {}", e)),
-            }
-        },
-        Err(e) => {
-            log_error(&format!("Browser Launch Failed: {}", e));
-            println!("Ensure you ran: pkg install chromium");
+    if session_id.is_none() {
+        username = read_line("Instagram username:");
+        print!("{} ", "Instagram password:".yellow());
+        let _ = io::stdout().flush();
+        if io::stdin().read_line(&mut password).is_err() {
+            log_error("Could not read the password.");
+            return;
         }
+        password = password.trim_end_matches(['\r', '\n']).to_string();
     }
-    
-    log_info("Operation Completed.");
+
+    let targets: Vec<String> = read_line("Targets (comma-separated usernames):")
+        .split(',')
+        .map(|target| {
+            target
+                .trim()
+                .trim_start_matches('@')
+                .trim_matches('/')
+                .to_string()
+        })
+        .filter(|target| !target.is_empty())
+        .collect();
+    if targets.is_empty() {
+        log_error("No targets were provided.");
+        return;
+    }
+
+    let browser = match browser::launch_browser() {
+        Ok(browser) => browser,
+        Err(error) => {
+            log_error(&error.to_string());
+            return;
+        }
+    };
+    let bot = match InstagramBot::new(&browser) {
+        Ok(bot) => bot,
+        Err(error) => {
+            log_error(&format!("Could not create browser tab: {}", error));
+            return;
+        }
+    };
+
+    let login_result = match session_id {
+        Some(session) => bot.login_with_session(&session),
+        None => bot.login(&username, &password),
+    };
+    if let Err(error) = login_result {
+        log_error(&format!("Login failed: {}", error));
+        return;
+    }
+
+    if let Err(error) = bot.process_targets(targets).await {
+        log_error(&format!("Scraping failed: {}", error));
+        return;
+    }
+    log_info("Operation completed.");
 }

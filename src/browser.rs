@@ -1,79 +1,109 @@
+use anyhow::{anyhow, Result};
 use headless_chrome::{Browser, LaunchOptions};
-use anyhow::{Result, anyhow};
+use std::env;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::Command;
-use std::ffi::OsStr;
-use std::env;
-use crate::config::{USER_AGENT, CHROME_PATH};
+
+use crate::config::CHROME_PATH;
 
 fn find_chromium_path() -> Result<PathBuf> {
-    let p1 = PathBuf::from(CHROME_PATH);
-    if p1.exists() { return Ok(p1); }
+    if let Ok(configured) = env::var("STOV_CHROMIUM_PATH") {
+        let path = PathBuf::from(configured);
+        if path.exists() {
+            return Ok(path);
+        }
+        return Err(anyhow!(
+            "STOV_CHROMIUM_PATH does not exist: {}",
+            path.display()
+        ));
+    }
+
+    let configured_path = PathBuf::from(CHROME_PATH);
+    if configured_path.exists() {
+        return Ok(configured_path);
+    }
 
     if let Ok(output) = Command::new("which").arg("chromium").output() {
         if output.status.success() {
-            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !s.is_empty() { return Ok(PathBuf::from(s)); }
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Ok(PathBuf::from(path));
+            }
         }
     }
-    Err(anyhow!("Chromium binary not found. Run: pkg install chromium"))
+
+    Err(anyhow!(
+        "Chromium binary not found. Set STOV_CHROMIUM_PATH or install Chromium."
+    ))
+}
+
+fn env_u32(name: &str, default: u32) -> u32 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value| *value >= 320)
+        .unwrap_or(default)
 }
 
 pub fn launch_browser() -> Result<Browser> {
-    let termux_path = find_chromium_path()?;
-    let ua_arg = format!("--user-agent={}", USER_AGENT);
-    
-    let random_id: u32 = rand::random();
-    let temp_dir = std::env::temp_dir().join(format!("chrome_stov_{}", random_id));
-    let user_data_arg = format!("--user-data-dir={}", temp_dir.to_string_lossy());
+    let chromium_path = find_chromium_path()?;
+    let width = env_u32("STOV_WINDOW_WIDTH", 1280);
+    let height = env_u32("STOV_WINDOW_HEIGHT", 720);
+    let user_data_dir = env::temp_dir().join(format!("stov-chrome-{}", rand::random::<u64>()));
 
-    let has_display = env::var("DISPLAY").is_ok();
-    
-    if has_display {
-        println!(" [DISPLAY] Launching in X11 Desktop Visual Mode (1920x1080)...");
-    } else {
-        println!(" [HEADLESS] Launching in Invisible Desktop Mode.");
-    }
-
-    // DESKTOP ARGUMENTS
-    let args_vec = vec![
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--no-zygote",
-        "--single-process",
-        "--ignore-certificate-errors",
-        // Force Desktop Resolution
-        "--window-size=1920,1080", 
-        "--start-maximized",
-        "--disable-mobile-emulation",
-        "--disable-software-rasterizer",
-        "--disable-default-apps",
-        "--disable-extensions",
-        "--disable-sync",
-        "--no-first-run",
-        "--autoplay-policy=no-user-gesture-required",
-        "--use-fake-ui-for-media-stream",
-        &user_data_arg,
-        &ua_arg
+    let mut args = vec![
+        "--disable-dev-shm-usage".to_string(),
+        "--disable-background-networking".to_string(),
+        "--disable-default-apps".to_string(),
+        "--disable-extensions".to_string(),
+        "--disable-sync".to_string(),
+        "--no-first-run".to_string(),
+        "--autoplay-policy=no-user-gesture-required".to_string(),
+        format!("--window-size={},{}", width, height),
+        format!("--user-data-dir={}", user_data_dir.display()),
     ];
 
+    // Termux normally requires these two flags; keep them opt-in elsewhere.
+    if env::var("STOV_ALLOW_NO_SANDBOX").as_deref() == Ok("1") || env::var("TERMUX_VERSION").is_ok()
+    {
+        args.push("--no-sandbox".to_string());
+        args.push("--disable-setuid-sandbox".to_string());
+    }
+
+    if let Ok(user_agent) = env::var("STOV_USER_AGENT") {
+        if !user_agent.trim().is_empty() {
+            args.push(format!("--user-agent={}", user_agent));
+        }
+    }
+
+    let arg_refs: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
     let options = LaunchOptions {
-        headless: !has_display, 
-        sandbox: false,
-        path: Some(termux_path),
-        // Explicit Desktop Size in Options
-        window_size: Some((1920, 1080)), 
-        enable_gpu: false,
-        args: args_vec.iter().map(|s| OsStr::new(s)).collect(),
+        headless: env::var("DISPLAY").is_err(),
+        sandbox: env::var("STOV_ALLOW_NO_SANDBOX").as_deref() != Ok("1")
+            && env::var("TERMUX_VERSION").is_err(),
+        path: Some(chromium_path),
+        window_size: Some((width, height)),
+        enable_gpu: env::var("STOV_ENABLE_GPU").as_deref() == Ok("1"),
+        args: arg_refs,
         ..Default::default()
     };
 
-    println!("Initializing Termux Chromium Engine (Desktop Edition)...");
-    
-    match Browser::new(options) {
-        Ok(b) => Ok(b),
-        Err(e) => Err(anyhow!("Browser Launch Failed: {}. \nTip: If using X11, ensure Termux-X11 app is open.", e))
-    }
+    println!(
+        "Launching Chromium ({}x{}, {})...",
+        width,
+        height,
+        if options.headless {
+            "headless"
+        } else {
+            "display"
+        }
+    );
+
+    Browser::new(options).map_err(|error| {
+        anyhow!(
+            "Browser launch failed: {}. Set STOV_CHROMIUM_PATH if Chromium is not on PATH.",
+            error
+        )
+    })
 }

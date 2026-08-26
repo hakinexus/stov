@@ -1,17 +1,27 @@
 [package]
 name = "stov"
-version = "2.7.8-5"
+version = "3.0.0"
 edition = "2021"
 
 [dependencies]
-headless_chrome = "1.0"
-base64 = "0.21"
-tokio = { version = "1", features = ["full"] }
-anyhow = "1.0"
-reqwest = { version = "0.11", features = ["stream"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-rand = "0.8"
-colored = "2.0"
-futures-util = "0.3"
+# Browser automation and Chrome DevTools Protocol capture
+headless_chrome = "1.0.22"
+# Media/data handling
+base64 = "0.22.1"
+# Async runtime
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "time"] }
+# Error handling
+anyhow = "1.0.104"
+# Configuration/session serialization
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.145"
+# Small utilities and terminal output
+rand = "0.8.8"
+colored = "2.2.0"
+url = "2.5.8"
 
+[profile.release]
+opt-level = 3
+lto = false
+codegen-units = 16
+strip = "symbols"

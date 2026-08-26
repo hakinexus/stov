@@ -1,5 +1,4 @@
 /target/
-Cargo.lock
 
 # --- Data Directories ---
 downloads/
@@ -13,5 +12,4 @@ profiles/
 # Gallery dependencies
 stov-gallery/node_modules/
 stov-gallery/.env
-stov-gallery/package-lock.json
 
