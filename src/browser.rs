@@ -1,40 +1,84 @@
 use anyhow::{anyhow, Result};
 use headless_chrome::{Browser, LaunchOptions};
 use std::env;
-use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::config::CHROME_PATH;
 
+const CHROMIUM_NAMES: &[&str] = &["chromium", "chromium-browser", "google-chrome", "chrome"];
+
+fn is_candidate_file(path: &Path) -> bool {
+    path.is_file()
+}
+
+fn path_entries(path_value: Option<OsString>) -> Vec<PathBuf> {
+    path_value
+        .map(|value| env::split_paths(&value).collect())
+        .unwrap_or_default()
+}
+
+fn candidate_paths(prefix: Option<&Path>, path_value: Option<OsString>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(prefix) = prefix {
+        candidates.extend(
+            CHROMIUM_NAMES
+                .iter()
+                .map(|name| prefix.join("bin").join(name)),
+        );
+    }
+
+    // Termux’s normal default prefix plus common Linux locations make the binary
+    // discoverable even when `which` is unavailable or behaves differently.
+    for path in [
+        PathBuf::from(CHROME_PATH),
+        PathBuf::from("/data/data/com.termux/files/usr/bin/chromium"),
+        PathBuf::from("/data/data/com.termux/files/usr/bin/chromium-browser"),
+        PathBuf::from("/usr/bin/chromium"),
+        PathBuf::from("/usr/bin/chromium-browser"),
+        PathBuf::from("/usr/bin/google-chrome"),
+        PathBuf::from("/usr/local/bin/chromium"),
+    ] {
+        candidates.push(path);
+    }
+
+    for directory in path_entries(path_value) {
+        candidates.extend(CHROMIUM_NAMES.iter().map(|name| directory.join(name)));
+    }
+
+    candidates
+}
+
 fn find_chromium_path() -> Result<PathBuf> {
     if let Ok(configured) = env::var("STOV_CHROMIUM_PATH") {
-        let path = PathBuf::from(configured);
-        if path.exists() {
+        let path = PathBuf::from(configured.trim());
+        if is_candidate_file(&path) {
             return Ok(path);
         }
         return Err(anyhow!(
-            "STOV_CHROMIUM_PATH does not exist: {}",
+            "STOV_CHROMIUM_PATH is set but is not a file: {}. Run `command -v chromium` and set STOV_CHROMIUM_PATH to that result.",
             path.display()
         ));
     }
 
-    let configured_path = PathBuf::from(CHROME_PATH);
-    if configured_path.exists() {
-        return Ok(configured_path);
+    let prefix = env::var_os("PREFIX")
+        .or_else(|| env::var_os("TERMUX_PREFIX"))
+        .map(PathBuf::from);
+    let candidates = candidate_paths(prefix.as_deref(), env::var_os("PATH"));
+    if let Some(path) = candidates.iter().find(|path| is_candidate_file(path)) {
+        return Ok(path.clone());
     }
 
-    if let Ok(output) = Command::new("which").arg("chromium").output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Ok(PathBuf::from(path));
-            }
-        }
-    }
-
+    let searched = candidates
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n  ");
     Err(anyhow!(
-        "Chromium binary not found. Set STOV_CHROMIUM_PATH or install Chromium."
+        "Chromium binary not found. STOV searched:\n  {}\n\nTermux setup:\n  pkg update\n  pkg install x11-repo tur-repo\n  pkg install chromium\n  command -v chromium\n\nIf Chromium is installed elsewhere, run:\n  export STOV_CHROMIUM_PATH=$(command -v chromium)",
+        searched
     ))
 }
 
@@ -82,7 +126,7 @@ pub fn launch_browser() -> Result<Browser> {
         headless: env::var("DISPLAY").is_err(),
         sandbox: env::var("STOV_ALLOW_NO_SANDBOX").as_deref() != Ok("1")
             && env::var("TERMUX_VERSION").is_err(),
-        path: Some(chromium_path),
+        path: Some(chromium_path.clone()),
         window_size: Some((width, height)),
         enable_gpu: env::var("STOV_ENABLE_GPU").as_deref() == Ok("1"),
         args: arg_refs,
@@ -90,7 +134,8 @@ pub fn launch_browser() -> Result<Browser> {
     };
 
     println!(
-        "Launching Chromium ({}x{}, {})...",
+        "Launching Chromium at {} ({}x{}, {})...",
+        chromium_path.display(),
         width,
         height,
         if options.headless {
@@ -100,10 +145,44 @@ pub fn launch_browser() -> Result<Browser> {
         }
     );
 
+    Command::new(&chromium_path)
+        .arg("--version")
+        .output()
+        .map_err(|error| {
+            anyhow!(
+                "Chromium was found at {} but could not execute it: {}",
+                chromium_path.display(),
+                error
+            )
+        })?;
+
     Browser::new(options).map_err(|error| {
         anyhow!(
-            "Browser launch failed: {}. Set STOV_CHROMIUM_PATH if Chromium is not on PATH.",
+            "Browser launch failed using {}: {}. If this is Termux, confirm `chromium --version` works and set STOV_ALLOW_NO_SANDBOX=1 only when required.",
+            chromium_path.display(),
             error
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn candidates_include_termux_prefix_and_path_entries() {
+        let paths = candidate_paths(
+            Some(Path::new("/data/data/com.termux/files/usr")),
+            Some(OsString::from("/custom/bin:/another/bin")),
+        );
+        assert!(paths
+            .iter()
+            .any(|path| path == Path::new("/data/data/com.termux/files/usr/bin/chromium")));
+        assert!(paths
+            .iter()
+            .any(|path| path == Path::new("/custom/bin/chromium")));
+        assert!(paths
+            .iter()
+            .any(|path| path == Path::new("/another/bin/google-chrome")));
+    }
 }

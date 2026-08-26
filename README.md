@@ -28,7 +28,11 @@
 
 ```bash
 pkg update && pkg upgrade -y
-pkg install rust binutils chromium ffmpeg nodejs -y
+pkg install rust binutils ffmpeg nodejs -y
+pkg install x11-repo tur-repo
+pkg install chromium
+command -v chromium
+chromium --version
 ```
 
 **Debian/Ubuntu**
@@ -46,7 +50,7 @@ cd stov
 cargo run --release
 ```
 
-The CLI accepts an account, password, and comma-separated target usernames. A successful login can save a local session profile for later use. Session files are private credentials; never commit `profiles/`.
+The CLI accepts an account, password, and comma-separated target usernames. On Termux, STOV detects Chromium through `$PREFIX/bin`, `$TERMUX_PREFIX/bin`, and the active `$PATH`; it no longer depends on the external `which` command. If Chromium is installed in a custom location, set `STOV_CHROMIUM_PATH` to the executable path before running. A successful login can save a local session profile for later use. Session files are private credentials; never commit `profiles/`.
 
 ### 3. Run the gallery
 

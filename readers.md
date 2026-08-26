@@ -7,7 +7,7 @@ This document is a compact map of STOV for anyone reading or extending the code.
 | Read | Why |
 |---|---|
 | `src/main.rs` | CLI input, profile selection, browser startup, login, and target dispatch |
-| `src/browser.rs` | Chromium path discovery, viewport, sandbox, and runtime flags |
+| `src/browser.rs` | Chromium path discovery across `$PREFIX`, `$TERMUX_PREFIX`, `$PATH`, and Android defaults; viewport, sandbox, and runtime flags |
 | `src/instagram.rs` | Login, story-viewer state, media selection, CDP response capture, and download orchestration |
 | `src/utils.rs` | Atomic writes, validation, manifests, session storage, and FFmpeg/FFprobe integration |
 | `src/config.rs` | Selectors, filesystem locations, and browser defaults |
@@ -41,6 +41,8 @@ Chromium session ── login/session cookie ──▶ Instagram profile
 ```
 
 ## Reliability rules
+
+On Termux, Chromium discovery must use environment-aware paths and direct filesystem checks. Do not rely on the external `which` command: `$PREFIX/bin`, `$TERMUX_PREFIX/bin`, and the active `$PATH` are the source of truth, with `STOV_CHROMIUM_PATH` available for custom installations.
 
 The scraper must not infer a new story from a URL change alone. A story transition is accepted only after the observed viewer fingerprint changes or the viewer closes. Playback progress is not part of the fingerprint because it changes during the same story.
 
