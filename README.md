@@ -31,8 +31,8 @@ pkg update && pkg upgrade -y
 pkg install rust binutils ffmpeg nodejs -y
 pkg install x11-repo tur-repo
 pkg install chromium
-command -v chromium
-chromium --version
+command -v chromium-browser
+chromium-browser --version
 ```
 
 **Debian/Ubuntu**
@@ -50,7 +50,7 @@ cd stov
 cargo run --release
 ```
 
-The CLI accepts an account, password, and comma-separated target usernames. On Termux, STOV detects Chromium through `$PREFIX/bin`, `$TERMUX_PREFIX/bin`, and the active `$PATH`; it no longer depends on the external `which` command. If Chromium is installed in a custom location, set `STOV_CHROMIUM_PATH` to the executable path before running. A successful login can save a local session profile for later use. Session files are private credentials; never commit `profiles/`.
+The CLI accepts an account, password, and comma-separated target usernames. On Termux, STOV detects `chromium-browser` through `$PREFIX/bin`, `$TERMUX_PREFIX/bin`, and the active `$PATH`; it does not depend on the external `which` command. A successful login can save a local session profile for later use. Session files are private credentials; never commit `profiles/`.
 
 ### 3. Run the gallery
 
@@ -70,10 +70,14 @@ Open [http://127.0.0.1:3000](http://127.0.0.1:3000). The gallery reads validated
 | `STOV_WINDOW_WIDTH` | `1280` | Browser viewport width |
 | `STOV_WINDOW_HEIGHT` | `720` | Browser viewport height |
 | `STOV_USER_AGENT` | Chromium default | Optional user-agent override |
+| `STOV_FFMPEG_PATH` | `ffmpeg` on `$PATH` | Optional FFmpeg executable path |
+| `STOV_FFPROBE_PATH` | `ffprobe` on `$PATH` | Optional FFprobe executable path |
 | `STOV_ENABLE_GPU` | disabled | Enable GPU where supported |
 | `STOV_ALLOW_NO_SANDBOX` | disabled | Explicitly allow no-sandbox mode when required |
 | `HOST` | `127.0.0.1` | Gallery bind address |
 | `PORT` | `3000` | Gallery port |
+
+Audio downloads require both `ffmpeg` and `ffprobe`. STOV validates the video, validates the audio stream, muxes the tracks, and validates the final file before marking it `complete`.
 
 ## Output
 

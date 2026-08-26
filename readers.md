@@ -42,7 +42,7 @@ Chromium session ── login/session cookie ──▶ Instagram profile
 
 ## Reliability rules
 
-On Termux, Chromium discovery must use environment-aware paths and direct filesystem checks. Do not rely on the external `which` command: `$PREFIX/bin`, `$TERMUX_PREFIX/bin`, and the active `$PATH` are the source of truth, with `STOV_CHROMIUM_PATH` available for custom installations.
+On Termux, Chromium discovery must use environment-aware paths and direct filesystem checks. The Termux package in this deployment exposes `chromium-browser`, not `chromium`; `$PREFIX/bin`, `$TERMUX_PREFIX/bin`, and the active `$PATH` are the source of truth, with `STOV_CHROMIUM_PATH` available for custom installations. Audio processing uses `ffmpeg` and `ffprobe`; `STOV_FFMPEG_PATH` and `STOV_FFPROBE_PATH` are available when either executable is outside `$PATH`.
 
 The scraper must not infer a new story from a URL change alone. A story transition is accepted only after the observed viewer fingerprint changes or the viewer closes. Playback progress is not part of the fingerprint because it changes during the same story.
 

@@ -51,6 +51,14 @@ fn candidate_paths(prefix: Option<&Path>, path_value: Option<OsString>) -> Vec<P
     candidates
 }
 
+fn is_termux(prefix: Option<&Path>) -> bool {
+    env::var_os("TERMUX_VERSION").is_some()
+        || env::var_os("TERMUX_PREFIX").is_some()
+        || prefix
+            .map(|value| value.to_string_lossy().contains("/com.termux/"))
+            .unwrap_or(false)
+}
+
 fn find_chromium_path() -> Result<PathBuf> {
     if let Ok(configured) = env::var("STOV_CHROMIUM_PATH") {
         let path = PathBuf::from(configured.trim());
@@ -58,7 +66,7 @@ fn find_chromium_path() -> Result<PathBuf> {
             return Ok(path);
         }
         return Err(anyhow!(
-            "STOV_CHROMIUM_PATH is set but is not a file: {}. Run `command -v chromium` and set STOV_CHROMIUM_PATH to that result.",
+            "STOV_CHROMIUM_PATH is set but is not a file: {}. Run `command -v chromium-browser` and set STOV_CHROMIUM_PATH to that result.",
             path.display()
         ));
     }
@@ -77,7 +85,7 @@ fn find_chromium_path() -> Result<PathBuf> {
         .collect::<Vec<_>>()
         .join("\n  ");
     Err(anyhow!(
-        "Chromium binary not found. STOV searched:\n  {}\n\nTermux setup:\n  pkg update\n  pkg install x11-repo tur-repo\n  pkg install chromium\n  command -v chromium\n\nIf Chromium is installed elsewhere, run:\n  export STOV_CHROMIUM_PATH=$(command -v chromium)",
+        "Chromium binary not found. STOV searched:\n  {}\n\nTermux setup:\n  pkg update\n  pkg install x11-repo tur-repo\n  pkg install chromium\n  command -v chromium-browser\n  chromium-browser --version\n\nIf Chromium is installed elsewhere, run:\n  export STOV_CHROMIUM_PATH=$(command -v chromium-browser)",
         searched
     ))
 }
@@ -109,8 +117,12 @@ pub fn launch_browser() -> Result<Browser> {
     ];
 
     // Termux normally requires these two flags; keep them opt-in elsewhere.
-    if env::var("STOV_ALLOW_NO_SANDBOX").as_deref() == Ok("1") || env::var("TERMUX_VERSION").is_ok()
-    {
+    let prefix = env::var_os("PREFIX")
+        .or_else(|| env::var_os("TERMUX_PREFIX"))
+        .map(PathBuf::from);
+    let termux = is_termux(prefix.as_deref());
+
+    if env::var("STOV_ALLOW_NO_SANDBOX").as_deref() == Ok("1") || termux {
         args.push("--no-sandbox".to_string());
         args.push("--disable-setuid-sandbox".to_string());
     }
@@ -124,8 +136,7 @@ pub fn launch_browser() -> Result<Browser> {
     let arg_refs: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
     let options = LaunchOptions {
         headless: env::var("DISPLAY").is_err(),
-        sandbox: env::var("STOV_ALLOW_NO_SANDBOX").as_deref() != Ok("1")
-            && env::var("TERMUX_VERSION").is_err(),
+        sandbox: env::var("STOV_ALLOW_NO_SANDBOX").as_deref() != Ok("1") && !termux,
         path: Some(chromium_path.clone()),
         window_size: Some((width, height)),
         enable_gpu: env::var("STOV_ENABLE_GPU").as_deref() == Ok("1"),
@@ -158,7 +169,7 @@ pub fn launch_browser() -> Result<Browser> {
 
     Browser::new(options).map_err(|error| {
         anyhow!(
-            "Browser launch failed using {}: {}. If this is Termux, confirm `chromium --version` works and set STOV_ALLOW_NO_SANDBOX=1 only when required.",
+            "Browser launch failed using {}: {}. If this is Termux, confirm `chromium-browser --version` works and set STOV_ALLOW_NO_SANDBOX=1 only when required.",
             chromium_path.display(),
             error
         )

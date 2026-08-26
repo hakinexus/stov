@@ -3,6 +3,7 @@ use base64::{engine::general_purpose, Engine as _};
 use colored::*;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -187,8 +188,16 @@ fn looks_like_image(bytes: &[u8]) -> bool {
         || (bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP")
 }
 
+fn media_tool(default_name: &str, environment_name: &str) -> PathBuf {
+    env::var_os(environment_name)
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| PathBuf::from(default_name))
+}
+
 fn probe_stream_types(path: &Path) -> Result<Vec<String>> {
-    let output = Command::new("ffprobe")
+    let ffprobe = media_tool("ffprobe", "STOV_FFPROBE_PATH");
+    let output = Command::new(&ffprobe)
         .args([
             "-v",
             "error",
@@ -199,7 +208,13 @@ fn probe_stream_types(path: &Path) -> Result<Vec<String>> {
         ])
         .arg(path)
         .output()
-        .with_context(|| format!("Could not execute ffprobe for {}", path.display()))?;
+        .with_context(|| {
+            format!(
+                "Could not execute {} for {}. Install ffmpeg or set STOV_FFPROBE_PATH.",
+                ffprobe.display(),
+                path.display()
+            )
+        })?;
     if !output.status.success() {
         return Err(anyhow!(
             "ffprobe rejected {}: {}",
@@ -290,7 +305,8 @@ pub fn save_base64_file(base64_string: &str, filename: &str) -> Result<()> {
 }
 
 fn run_ffmpeg(args: &[PathOrArg<'_>]) -> Result<()> {
-    let mut command = Command::new("ffmpeg");
+    let ffmpeg = media_tool("ffmpeg", "STOV_FFMPEG_PATH");
+    let mut command = Command::new(&ffmpeg);
     command.arg("-hide_banner").arg("-loglevel").arg("error");
     for arg in args {
         match arg {
@@ -302,10 +318,12 @@ fn run_ffmpeg(args: &[PathOrArg<'_>]) -> Result<()> {
             }
         }
     }
-    let output = command
-        .stdin(Stdio::null())
-        .output()
-        .context("Could not execute ffmpeg; install ffmpeg and ffprobe")?;
+    let output = command.stdin(Stdio::null()).output().with_context(|| {
+        format!(
+            "Could not execute {}. Install ffmpeg or set STOV_FFMPEG_PATH.",
+            ffmpeg.display()
+        )
+    })?;
     if !output.status.success() {
         return Err(anyhow!(
             "ffmpeg failed with {}: {}",
@@ -399,13 +417,28 @@ pub fn now_unix() -> u64 {
 }
 
 pub fn ensure_media_tools() -> Result<()> {
-    for command_name in ["ffmpeg", "ffprobe"] {
-        let output = Command::new(command_name)
+    for (command_name, environment_name) in [
+        ("ffmpeg", "STOV_FFMPEG_PATH"),
+        ("ffprobe", "STOV_FFPROBE_PATH"),
+    ] {
+        let executable = media_tool(command_name, environment_name);
+        let output = Command::new(&executable)
             .arg("-version")
             .output()
-            .with_context(|| format!("{} is not installed or not on PATH", command_name))?;
+            .with_context(|| {
+                format!(
+                    "{} is not installed or not executable at {}. Install ffmpeg or set {}.",
+                    command_name,
+                    executable.display(),
+                    environment_name
+                )
+            })?;
         if !output.status.success() {
-            return Err(anyhow!("{} failed its startup check", command_name));
+            return Err(anyhow!(
+                "{} failed its startup check at {}",
+                command_name,
+                executable.display()
+            ));
         }
         if let Some(version) = String::from_utf8_lossy(&output.stdout).lines().next() {
             log_info(&format!("{} detected: {}", command_name, version));
