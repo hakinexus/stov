@@ -15,6 +15,8 @@ pub const USER_CSS_SELECTORS: &[&str] = &[
     "input[aria-label='Phone number, username, or email']",
     "input[aria-label*='username' i]",
     "input[placeholder*='username' i]",
+    "input[type='text']",
+    "input:not([type])",
 ];
 pub const USER_XPATH_SELECTORS: &[&str] = &[
     "//input[@name='username']",

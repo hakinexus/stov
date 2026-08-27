@@ -156,59 +156,126 @@ impl<'a> InstagramBot<'a> {
         })
     }
 
-    fn find_now(
-        &self,
-        css_selectors: &[&str],
-        xpath_selectors: &[&str],
-    ) -> Option<(Element<'_>, String)> {
-        fn visible_element<'a>(elements: Vec<Element<'a>>) -> Option<Element<'a>> {
-            elements.into_iter().rev().find(|element| {
-                element
-                    .is_visible_with_timeout(Duration::from_millis(150))
-                    .unwrap_or(false)
-            })
-        }
-
-        for selector in css_selectors {
-            if let Ok(elements) = self.tab.find_elements(selector) {
-                if let Some(element) = visible_element(elements) {
-                    return Some((element, (*selector).to_string()));
-                }
-            }
-        }
-        for selector in xpath_selectors {
-            if let Ok(elements) = self.tab.find_elements_by_xpath(selector) {
-                if let Some(element) = visible_element(elements) {
-                    return Some((element, (*selector).to_string()));
-                }
-            }
-        }
-        None
-    }
-
-    fn wait_for_field(
+    fn fill_field(
         &self,
         label: &str,
         css_selectors: &[&str],
         xpath_selectors: &[&str],
+        text: &str,
         timeout: Duration,
-    ) -> Result<Element<'_>> {
+    ) -> Result<()> {
+        #[derive(Debug, Deserialize)]
+        struct FillResult {
+            ok: bool,
+            selector: Option<String>,
+            reason: Option<String>,
+        }
+
+        let css = serde_json::to_string(css_selectors)?;
+        let xpath = serde_json::to_string(xpath_selectors)?;
+        let value = serde_json::to_string(text)?;
+        let field_label = serde_json::to_string(label)?;
+        let script = format!(
+            r#"(function() {{
+                const cssSelectors = {css};
+                const xpathSelectors = {xpath};
+                const value = {value};
+                const fieldLabel = {field_label};
+                function usable(element) {{
+                    if (!element || element.disabled || element.readOnly) return false;
+                    const rect = element.getBoundingClientRect();
+                    const style = window.getComputedStyle(element);
+                    return rect.width > 0 && rect.height > 0 &&
+                        style.display !== 'none' && style.visibility !== 'hidden';
+                }}
+                function find() {{
+                    for (const selector of cssSelectors) {{
+                        const element = document.querySelector(selector);
+                        if (usable(element)) return [element, selector];
+                    }}
+                    for (const expression of xpathSelectors) {{
+                        const result = document.evaluate(
+                            expression, document, null,
+                            XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null
+                        );
+                        for (let index = 0; index < result.snapshotLength; index++) {{
+                            const element = result.snapshotItem(index);
+                            if (usable(element)) return [element, expression];
+                        }}
+                    }}
+                    // Some login variants omit name, autocomplete, aria-label, and placeholder.
+                    // Use the visible input type and attribute text as a final bounded fallback.
+                    for (const element of document.querySelectorAll('input')) {{
+                        if (!usable(element)) continue;
+                        const signature = [
+                            element.type, element.name, element.id,
+                            element.autocomplete, element.placeholder,
+                            element.getAttribute('aria-label')
+                        ].join(' ').toLowerCase();
+                        if (fieldLabel === 'password' &&
+                            (element.type === 'password' || signature.includes('pass'))) {{
+                            return [element, 'input heuristic: password'];
+                        }}
+                        if (fieldLabel === 'username' &&
+                            element.type !== 'password' && !signature.includes('pass')) {{
+                            return [element, 'input heuristic: username'];
+                        }}
+                    }}
+                    return [null, null];
+                }}
+                const [element, selector] = find();
+                if (!element) return {{ ok: false, selector: null, reason: 'missing-or-hidden' }};
+                element.focus();
+                const descriptor = Object.getOwnPropertyDescriptor(
+                    HTMLInputElement.prototype, 'value'
+                );
+                if (descriptor && descriptor.set) descriptor.set.call(element, value);
+                else element.value = value;
+                element.dispatchEvent(new Event('input', {{ bubbles: true, composed: true }}));
+                element.dispatchEvent(new Event('change', {{ bubbles: true, composed: true }}));
+                return {{
+                    ok: element.value === value,
+                    selector,
+                    reason: element.value === value ? 'verified' : 'value-mismatch'
+                }};
+            }})()"#,
+            css = css,
+            xpath = xpath,
+            value = value,
+            field_label = field_label
+        );
+
         let started = std::time::Instant::now();
+        let mut last_reason = "missing-or-hidden".to_string();
         while started.elapsed() < timeout {
-            if let Some((element, selector)) = self.find_now(css_selectors, xpath_selectors) {
-                log_info(&format!("{} field matched selector: {}", label, selector));
-                return Ok(element);
+            let result = self.tab.evaluate(&script, false)?;
+            let value = result.value.unwrap_or_else(|| serde_json::json!({}));
+            let fill: FillResult = serde_json::from_value(value)
+                .context("Invalid result from browser-side login field assignment")?;
+            if fill.ok {
+                log_info(&format!(
+                    "{} field assigned and verified with selector: {}",
+                    label,
+                    fill.selector
+                        .unwrap_or_else(|| "browser-side lookup".to_string())
+                ));
+                return Ok(());
+            }
+            if let Some(reason) = fill.reason {
+                last_reason = reason;
             }
             thread::sleep(Duration::from_millis(250));
         }
+
         self.snapshot(
             ERROR_DIR,
             &format!("login_{}_timeout", safe_filename(label)),
         );
         Err(anyhow!(
-            "Timed out waiting for the {} field after {} seconds",
+            "Could not assign the {} field after {} seconds (last state: {})",
             label,
-            timeout.as_secs()
+            timeout.as_secs(),
+            last_reason
         ))
     }
 
@@ -228,12 +295,6 @@ impl<'a> InstagramBot<'a> {
                 }
             }
         }
-    }
-
-    fn react_type(&self, element: &Element, text: &str) -> Result<()> {
-        element.type_into(text)?;
-        thread::sleep(Duration::from_millis(150));
-        Ok(())
     }
 
     fn safely_click_login(&self) -> Result<()> {
@@ -315,21 +376,21 @@ impl<'a> InstagramBot<'a> {
         }
 
         log_info("Waiting for username field...");
-        let user_element = self.wait_for_field(
+        self.fill_field(
             "username",
             USER_CSS_SELECTORS,
             USER_XPATH_SELECTORS,
+            user,
             Duration::from_secs(45),
         )?;
-        self.react_type(&user_element, user)?;
         log_info("Username entered. Waiting for password field...");
-        let password_element = self.wait_for_field(
+        self.fill_field(
             "password",
             PASS_CSS_SELECTORS,
             PASS_XPATH_SELECTORS,
+            pass,
             Duration::from_secs(45),
         )?;
-        self.react_type(&password_element, pass)?;
         thread::sleep(Duration::from_secs(1));
         self.safely_click_login()?;
 
