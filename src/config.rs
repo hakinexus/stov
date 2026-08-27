@@ -8,12 +8,39 @@ pub const PROOF_DIR: &str = "./images/login_proofs";
 pub const ERROR_DIR: &str = "./images/story_errors";
 pub const PROFILES_DIR: &str = "./profiles";
 
-// Login selectors
-pub const USER_CSS: &str = "input[name='username']";
-pub const USER_XPATH_1: &str = "//input[@name='username']";
-pub const USER_XPATH_2: &str = "//input[@type='text']";
-pub const PASS_CSS: &str = "input[name='password']";
-pub const PASS_XPATH: &str = "//input[@name='password']";
+// Login selectors. Instagram has used several equivalent attributes over time.
+pub const USER_CSS_SELECTORS: &[&str] = &[
+    "input[name='username']",
+    "input[autocomplete='username']",
+    "input[aria-label='Phone number, username, or email']",
+    "input[aria-label*='username' i]",
+    "input[placeholder*='username' i]",
+];
+pub const USER_XPATH_SELECTORS: &[&str] = &[
+    "//input[@name='username']",
+    "//input[@autocomplete='username']",
+    "//input[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'username')]",
+    "//input[contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'username')]",
+];
+pub const PASS_CSS_SELECTORS: &[&str] = &[
+    "input[name='password']",
+    "input[name='pass']",
+    "input[type='password']",
+    "input[autocomplete='current-password']",
+    "input[aria-label='Password']",
+    "input[aria-label*='password' i]",
+    "input[placeholder*='password' i]",
+    "input[id*='password' i]",
+];
+pub const PASS_XPATH_SELECTORS: &[&str] = &[
+    "//input[@name='password']",
+    "//input[@name='pass']",
+    "//input[@type='password']",
+    "//input[@autocomplete='current-password']",
+    "//input[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'password')]",
+    "//input[contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'password')]",
+    "//input[contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'password')]",
+];
 pub const SEL_SUBMIT: &str = "button[type='submit']";
 pub const SEL_HOME_ICON: &str = "svg[aria-label='Home']";
 pub const SEL_AVATAR: &str = "img[alt*='profile picture']";

@@ -156,21 +156,22 @@ impl<'a> InstagramBot<'a> {
         })
     }
 
-    fn find_now(&self, css: &str, xpath1: &str, xpath2: Option<&str>) -> Option<Element<'_>> {
-        if let Ok(mut elements) = self.tab.find_elements(css) {
-            if let Some(element) = elements.pop() {
-                return Some(element);
-            }
-        }
-        if let Ok(mut elements) = self.tab.find_elements_by_xpath(xpath1) {
-            if let Some(element) = elements.pop() {
-                return Some(element);
-            }
-        }
-        if let Some(xpath) = xpath2 {
-            if let Ok(mut elements) = self.tab.find_elements_by_xpath(xpath) {
+    fn find_now(
+        &self,
+        css_selectors: &[&str],
+        xpath_selectors: &[&str],
+    ) -> Option<(Element<'_>, String)> {
+        for selector in css_selectors {
+            if let Ok(mut elements) = self.tab.find_elements(selector) {
                 if let Some(element) = elements.pop() {
-                    return Some(element);
+                    return Some((element, (*selector).to_string()));
+                }
+            }
+        }
+        for selector in xpath_selectors {
+            if let Ok(mut elements) = self.tab.find_elements_by_xpath(selector) {
+                if let Some(element) = elements.pop() {
+                    return Some((element, (*selector).to_string()));
                 }
             }
         }
@@ -180,14 +181,14 @@ impl<'a> InstagramBot<'a> {
     fn wait_for_field(
         &self,
         label: &str,
-        css: &str,
-        xpath1: &str,
-        xpath2: Option<&str>,
+        css_selectors: &[&str],
+        xpath_selectors: &[&str],
         timeout: Duration,
     ) -> Result<Element<'_>> {
         let started = std::time::Instant::now();
         while started.elapsed() < timeout {
-            if let Some(element) = self.find_now(css, xpath1, xpath2) {
+            if let Some((element, selector)) = self.find_now(css_selectors, xpath_selectors) {
+                log_info(&format!("{} field matched selector: {}", label, selector));
                 return Ok(element);
             }
             thread::sleep(Duration::from_millis(250));
@@ -309,18 +310,16 @@ impl<'a> InstagramBot<'a> {
         log_info("Waiting for username field...");
         let user_element = self.wait_for_field(
             "username",
-            USER_CSS,
-            USER_XPATH_1,
-            Some(USER_XPATH_2),
+            USER_CSS_SELECTORS,
+            USER_XPATH_SELECTORS,
             Duration::from_secs(45),
         )?;
         self.react_type(&user_element, user)?;
         log_info("Username entered. Waiting for password field...");
         let password_element = self.wait_for_field(
             "password",
-            PASS_CSS,
-            PASS_XPATH,
-            None,
+            PASS_CSS_SELECTORS,
+            PASS_XPATH_SELECTORS,
             Duration::from_secs(45),
         )?;
         self.react_type(&password_element, pass)?;
@@ -785,5 +784,23 @@ mod tests {
         let url = http_url("https://cdn.example/media.mp4?bytestart=0&bytestop=99&oe=abc&st=xyz")
             .expect("valid media URL");
         assert_eq!(url, "https://cdn.example/media.mp4?oe=abc&st=xyz");
+    }
+}
+
+#[cfg(test)]
+mod login_selector_tests {
+    use super::*;
+
+    #[test]
+    fn password_selectors_cover_current_and_legacy_attributes() {
+        assert!(PASS_CSS_SELECTORS.contains(&"input[type='password']"));
+        assert!(PASS_CSS_SELECTORS.contains(&"input[autocomplete='current-password']"));
+        assert!(PASS_CSS_SELECTORS.contains(&"input[aria-label*='password' i]"));
+        assert!(PASS_XPATH_SELECTORS
+            .iter()
+            .any(|selector| selector.contains("@type='password'")));
+        assert!(PASS_XPATH_SELECTORS
+            .iter()
+            .any(|selector| selector.contains("@placeholder")));
     }
 }
