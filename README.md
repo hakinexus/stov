@@ -62,13 +62,33 @@ npm start
 
 Open [http://127.0.0.1:3000](http://127.0.0.1:3000). The gallery reads validated files from `../downloads` and updates when new artifacts are published.
 
+### Termux:X11 screen recording
+
+For a sharp visible bot window, install and open the Termux:X11 companion application, then run:
+
+```bash
+pkg install termux-x11-nightly
+export DISPLAY=:0
+export STOV_HEADLESS=0
+export STOV_WINDOW_WIDTH=1920
+export STOV_WINDOW_HEIGHT=1080
+export STOV_DEVICE_SCALE_FACTOR=1
+export STOV_ENABLE_GPU=1
+termux-x11 :0 &
+cargo run --release
+```
+
+The recording quality is also limited by the Termux:X11 surface and the Android recorder. If the phone surface is smaller than 1920×1080, set the two window variables to the surface’s native size instead of stretching it.
+
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---:|---|
 | `STOV_CHROMIUM_PATH` | Termux Chromium path | Override the Chromium executable |
-| `STOV_WINDOW_WIDTH` | `1280` | Browser viewport width |
-| `STOV_WINDOW_HEIGHT` | `720` | Browser viewport height |
+| `STOV_WINDOW_WIDTH` | `1920` | Browser viewport width |
+| `STOV_WINDOW_HEIGHT` | `1080` | Browser viewport height |
+| `STOV_DEVICE_SCALE_FACTOR` | `1.0` | Chromium device scale factor, `0.5`–`4.0` |
+| `STOV_HEADLESS` | follows `DISPLAY` | Set `0` for visible X11 mode or `1` for headless mode |
 | `STOV_USER_AGENT` | Chromium default | Optional user-agent override |
 | `STOV_FFMPEG_PATH` | `ffmpeg` on `$PATH` | Optional FFmpeg executable path |
 | `STOV_FFPROBE_PATH` | `ffprobe` on `$PATH` | Optional FFprobe executable path |

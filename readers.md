@@ -7,7 +7,7 @@ This document is a compact map of STOV for anyone reading or extending the code.
 | Read | Why |
 |---|---|
 | `src/main.rs` | CLI input, profile selection, browser startup, login, and target dispatch |
-| `src/browser.rs` | Chromium path discovery across `$PREFIX`, `$TERMUX_PREFIX`, `$PATH`, and Android defaults; viewport, sandbox, and runtime flags |
+| `src/browser.rs` | Chromium path discovery across `$PREFIX`, `$TERMUX_PREFIX`, `$PATH`, and Android defaults; high-resolution viewport, scaling, sandbox, and runtime flags |
 | `src/instagram.rs` | Login, story-viewer state, media selection, CDP response capture, and download orchestration |
 | `src/utils.rs` | Atomic writes, validation, manifests, session storage, and FFmpeg/FFprobe integration |
 | `src/config.rs` | Selectors, filesystem locations, and browser defaults |
@@ -51,6 +51,8 @@ A media file is never considered published merely because a request returned byt
 The gallery only lists published media extensions and ignores temporary files. Every API path that accepts a filename is reduced to a basename and checked against the downloads directory. Lightbox scroll locking is paired with one idempotent unlock path that restores the body styles and original scroll position.
 
 ## Change checklist
+
+For visible Termux:X11 runs, use `STOV_HEADLESS=0`, set `STOV_WINDOW_WIDTH` and `STOV_WINDOW_HEIGHT` to the X11 surface size, and use `STOV_DEVICE_SCALE_FACTOR=1` unless the surface requires another scale. The browser defaults are 1920×1080 with sRGB color and high-DPI support.
 
 Before changing selectors, capture a real page state and update the semantic fallback list in `src/config.rs`. Before changing media handling, add a unit test for the pure decision rule and keep FFprobe validation at the publication boundary. Before changing the gallery server, run `npm test` and exercise `/api/health`, `/api/files`, and `/api/stats` locally.
 

@@ -98,10 +98,29 @@ fn env_u32(name: &str, default: u32) -> u32 {
         .unwrap_or(default)
 }
 
+fn env_f32(name: &str, default: f32) -> f32 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value| (0.5..=4.0).contains(value))
+        .unwrap_or(default)
+}
+
+fn env_bool(name: &str, default: bool) -> bool {
+    match env::var(name).as_deref() {
+        Ok("1") | Ok("true") | Ok("yes") => true,
+        Ok("0") | Ok("false") | Ok("no") => false,
+        _ => default,
+    }
+}
+
 pub fn launch_browser() -> Result<Browser> {
     let chromium_path = find_chromium_path()?;
-    let width = env_u32("STOV_WINDOW_WIDTH", 1280);
-    let height = env_u32("STOV_WINDOW_HEIGHT", 720);
+    let width = env_u32("STOV_WINDOW_WIDTH", 1920);
+    let height = env_u32("STOV_WINDOW_HEIGHT", 1080);
+    let scale_factor = env_f32("STOV_DEVICE_SCALE_FACTOR", 1.0);
+    let display_available = env::var("DISPLAY").is_ok();
+    let headless = env_bool("STOV_HEADLESS", !display_available);
     let user_data_dir = env::temp_dir().join(format!("stov-chrome-{}", rand::random::<u64>()));
 
     let mut args = vec![
@@ -113,6 +132,10 @@ pub fn launch_browser() -> Result<Browser> {
         "--no-first-run".to_string(),
         "--autoplay-policy=no-user-gesture-required".to_string(),
         format!("--window-size={},{}", width, height),
+        format!("--force-device-scale-factor={}", scale_factor),
+        "--high-dpi-support=1".to_string(),
+        "--force-color-profile=srgb".to_string(),
+        "--window-position=0,0".to_string(),
         format!("--user-data-dir={}", user_data_dir.display()),
     ];
 
@@ -135,7 +158,7 @@ pub fn launch_browser() -> Result<Browser> {
 
     let arg_refs: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
     let options = LaunchOptions {
-        headless: env::var("DISPLAY").is_err(),
+        headless,
         sandbox: env::var("STOV_ALLOW_NO_SANDBOX").as_deref() != Ok("1") && !termux,
         path: Some(chromium_path.clone()),
         window_size: Some((width, height)),
