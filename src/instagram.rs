@@ -156,6 +156,36 @@ impl<'a> InstagramBot<'a> {
         })
     }
 
+    fn find_native_field(
+        &self,
+        css_selectors: &[&str],
+        xpath_selectors: &[&str],
+    ) -> Option<(Element<'_>, String)> {
+        fn visible_element<'a>(elements: Vec<Element<'a>>) -> Option<Element<'a>> {
+            elements.into_iter().rev().find(|element| {
+                element
+                    .is_visible_with_timeout(Duration::from_millis(150))
+                    .unwrap_or(false)
+            })
+        }
+
+        for selector in css_selectors {
+            if let Ok(elements) = self.tab.find_elements(selector) {
+                if let Some(element) = visible_element(elements) {
+                    return Some((element, (*selector).to_string()));
+                }
+            }
+        }
+        for selector in xpath_selectors {
+            if let Ok(elements) = self.tab.find_elements_by_xpath(selector) {
+                if let Some(element) = visible_element(elements) {
+                    return Some((element, (*selector).to_string()));
+                }
+            }
+        }
+        None
+    }
+
     fn fill_field(
         &self,
         label: &str,
@@ -164,13 +194,6 @@ impl<'a> InstagramBot<'a> {
         text: &str,
         timeout: Duration,
     ) -> Result<()> {
-        #[derive(Debug, Deserialize)]
-        struct FillResult {
-            ok: bool,
-            selector: Option<String>,
-            reason: Option<String>,
-        }
-
         let css = serde_json::to_string(css_selectors)?;
         let xpath = serde_json::to_string(xpath_selectors)?;
         let value = serde_json::to_string(text)?;
@@ -190,14 +213,19 @@ impl<'a> InstagramBot<'a> {
                 }}
                 function find() {{
                     for (const selector of cssSelectors) {{
-                        const element = document.querySelector(selector);
-                        if (usable(element)) return [element, selector];
+                        try {{
+                            const element = document.querySelector(selector);
+                            if (usable(element)) return [element, selector];
+                        }} catch (_) {{}}
                     }}
                     for (const expression of xpathSelectors) {{
-                        const result = document.evaluate(
-                            expression, document, null,
-                            XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null
-                        );
+                        let result;
+                        try {{
+                            result = document.evaluate(
+                                expression, document, null,
+                                XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null
+                            );
+                        }} catch (_) {{ continue; }}
                         for (let index = 0; index < result.snapshotLength; index++) {{
                             const element = result.snapshotItem(index);
                             if (usable(element)) return [element, expression];
@@ -224,7 +252,7 @@ impl<'a> InstagramBot<'a> {
                     return [null, null];
                 }}
                 const [element, selector] = find();
-                if (!element) return {{ ok: false, selector: null, reason: 'missing-or-hidden' }};
+                if (!element) return 'WAIT|missing-or-hidden';
                 element.focus();
                 const descriptor = Object.getOwnPropertyDescriptor(
                     HTMLInputElement.prototype, 'value'
@@ -233,11 +261,7 @@ impl<'a> InstagramBot<'a> {
                 else element.value = value;
                 element.dispatchEvent(new Event('input', {{ bubbles: true, composed: true }}));
                 element.dispatchEvent(new Event('change', {{ bubbles: true, composed: true }}));
-                return {{
-                    ok: element.value === value,
-                    selector,
-                    reason: element.value === value ? 'verified' : 'value-mismatch'
-                }};
+                return element.value === value ? 'OK|' + selector : 'WAIT|value-mismatch';
             }})()"#,
             css = css,
             xpath = xpath,
@@ -248,21 +272,39 @@ impl<'a> InstagramBot<'a> {
         let started = std::time::Instant::now();
         let mut last_reason = "missing-or-hidden".to_string();
         while started.elapsed() < timeout {
-            let result = self.tab.evaluate(&script, false)?;
-            let value = result.value.unwrap_or_else(|| serde_json::json!({}));
-            let fill: FillResult = serde_json::from_value(value)
-                .context("Invalid result from browser-side login field assignment")?;
-            if fill.ok {
-                log_info(&format!(
-                    "{} field assigned and verified with selector: {}",
-                    label,
-                    fill.selector
-                        .unwrap_or_else(|| "browser-side lookup".to_string())
-                ));
-                return Ok(());
+            match self.tab.evaluate(&script, false) {
+                Ok(result) => {
+                    if let Some(status) = result
+                        .value
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                    {
+                        if let Some(selector) = status.strip_prefix("OK|") {
+                            log_info(&format!(
+                                "{} field assigned and verified with selector: {}",
+                                label, selector
+                            ));
+                            return Ok(());
+                        }
+                        last_reason = status;
+                    } else {
+                        last_reason = "browser-returned-no-status".to_string();
+                    }
+                }
+                Err(error) => {
+                    last_reason = format!("browser-evaluate: {}", error);
+                }
             }
-            if let Some(reason) = fill.reason {
-                last_reason = reason;
+
+            if let Some((element, selector)) =
+                self.find_native_field(css_selectors, xpath_selectors)
+            {
+                if element.type_into(text).is_ok() {
+                    log_info(&format!(
+                        "{} field filled with native typing fallback: {}",
+                        label, selector
+                    ));
+                    return Ok(());
+                }
             }
             thread::sleep(Duration::from_millis(250));
         }
