@@ -161,16 +161,24 @@ impl<'a> InstagramBot<'a> {
         css_selectors: &[&str],
         xpath_selectors: &[&str],
     ) -> Option<(Element<'_>, String)> {
+        fn visible_element<'a>(elements: Vec<Element<'a>>) -> Option<Element<'a>> {
+            elements.into_iter().rev().find(|element| {
+                element
+                    .is_visible_with_timeout(Duration::from_millis(150))
+                    .unwrap_or(false)
+            })
+        }
+
         for selector in css_selectors {
-            if let Ok(mut elements) = self.tab.find_elements(selector) {
-                if let Some(element) = elements.pop() {
+            if let Ok(elements) = self.tab.find_elements(selector) {
+                if let Some(element) = visible_element(elements) {
                     return Some((element, (*selector).to_string()));
                 }
             }
         }
         for selector in xpath_selectors {
-            if let Ok(mut elements) = self.tab.find_elements_by_xpath(selector) {
-                if let Some(element) = elements.pop() {
+            if let Ok(elements) = self.tab.find_elements_by_xpath(selector) {
+                if let Some(element) = visible_element(elements) {
                     return Some((element, (*selector).to_string()));
                 }
             }
@@ -223,8 +231,7 @@ impl<'a> InstagramBot<'a> {
     }
 
     fn react_type(&self, element: &Element, text: &str) -> Result<()> {
-        element.click()?;
-        self.tab.type_str(text)?;
+        element.type_into(text)?;
         thread::sleep(Duration::from_millis(150));
         Ok(())
     }
