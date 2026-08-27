@@ -156,19 +156,51 @@ impl<'a> InstagramBot<'a> {
         })
     }
 
-    fn smart_find(&self, css: &str, xpath1: &str, xpath2: Option<&str>) -> Result<Element<'_>> {
-        if let Ok(element) = self.tab.find_element(css) {
-            return Ok(element);
-        }
-        if let Ok(element) = self.tab.find_element_by_xpath(xpath1) {
-            return Ok(element);
-        }
-        if let Some(xpath) = xpath2 {
-            if let Ok(element) = self.tab.find_element_by_xpath(xpath) {
-                return Ok(element);
+    fn find_now(&self, css: &str, xpath1: &str, xpath2: Option<&str>) -> Option<Element<'_>> {
+        if let Ok(mut elements) = self.tab.find_elements(css) {
+            if let Some(element) = elements.pop() {
+                return Some(element);
             }
         }
-        Err(anyhow!("Element not found"))
+        if let Ok(mut elements) = self.tab.find_elements_by_xpath(xpath1) {
+            if let Some(element) = elements.pop() {
+                return Some(element);
+            }
+        }
+        if let Some(xpath) = xpath2 {
+            if let Ok(mut elements) = self.tab.find_elements_by_xpath(xpath) {
+                if let Some(element) = elements.pop() {
+                    return Some(element);
+                }
+            }
+        }
+        None
+    }
+
+    fn wait_for_field(
+        &self,
+        label: &str,
+        css: &str,
+        xpath1: &str,
+        xpath2: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Element<'_>> {
+        let started = std::time::Instant::now();
+        while started.elapsed() < timeout {
+            if let Some(element) = self.find_now(css, xpath1, xpath2) {
+                return Ok(element);
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
+        self.snapshot(
+            ERROR_DIR,
+            &format!("login_{}_timeout", safe_filename(label)),
+        );
+        Err(anyhow!(
+            "Timed out waiting for the {} field after {} seconds",
+            label,
+            timeout.as_secs()
+        ))
     }
 
     fn snapshot(&self, folder: &str, name: &str) {
@@ -191,8 +223,8 @@ impl<'a> InstagramBot<'a> {
 
     fn react_type(&self, element: &Element, text: &str) -> Result<()> {
         element.click()?;
-        element.type_into(text)?;
-        thread::sleep(Duration::from_millis(500));
+        self.tab.type_str(text)?;
+        thread::sleep(Duration::from_millis(150));
         Ok(())
     }
 
@@ -274,13 +306,23 @@ impl<'a> InstagramBot<'a> {
             }
         }
 
-        let user_element = self
-            .smart_find(USER_CSS, USER_XPATH_1, Some(USER_XPATH_2))
-            .context("Username field not found")?;
+        log_info("Waiting for username field...");
+        let user_element = self.wait_for_field(
+            "username",
+            USER_CSS,
+            USER_XPATH_1,
+            Some(USER_XPATH_2),
+            Duration::from_secs(45),
+        )?;
         self.react_type(&user_element, user)?;
-        let password_element = self
-            .smart_find(PASS_CSS, PASS_XPATH, None)
-            .context("Password field not found")?;
+        log_info("Username entered. Waiting for password field...");
+        let password_element = self.wait_for_field(
+            "password",
+            PASS_CSS,
+            PASS_XPATH,
+            None,
+            Duration::from_secs(45),
+        )?;
         self.react_type(&password_element, pass)?;
         thread::sleep(Duration::from_secs(1));
         self.safely_click_login()?;

@@ -133,8 +133,8 @@ See [`readers.md`](readers.md) for the short maintainer guide and data flow.
 
 | Symptom | Check first |
 |---|---|
-| Chromium will not start | Run `chromium --version`; set `STOV_CHROMIUM_PATH`; use no-sandbox only when required by the environment. |
-| Login does not complete | Re-authenticate, use a fresh session, and inspect `images/story_errors/`. |
+| Chromium will not start | Run `chromium-browser --version`; set `STOV_CHROMIUM_PATH` only for a custom path; use no-sandbox only when required by the environment. |
+| Login does not complete | The username and password fields now use bounded state-aware polling. Re-authenticate, allow up to 45 seconds for a slow page, and inspect `images/story_errors/login_password_timeout*.png` or `.html` if the password field never appears. |
 | Stories do not advance | Inspect the captured evidence and terminal logs; the controller now requires an observed media/state transition instead of a URL change. |
 | Video has no sound | Confirm `ffmpeg` and `ffprobe` are installed. A validated `video-only` result is reported honestly in the manifest. |
 | Gallery is empty | Start it from `stov-gallery/`, run `npm ci`, and check `/api/health`. |
